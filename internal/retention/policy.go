@@ -20,46 +20,53 @@ func NewPolicy(maxVersions int, keepLastMajor bool) *Policy {
 	}
 }
 
-// DetermineAssetsToDelete determines which assets should be deleted based on retention policy
-func (p *Policy) DetermineAssetsToDelete(releases []models.Release, assets []models.Asset) []models.Asset {
-	if len(releases) == 0 || len(assets) == 0 {
-		return nil
-	}
+// sortReleasesByVersion sorts releases by semantic version (newest first)
+func sortReleasesByVersion(releases []models.Release) []models.Release {
+	sorted := make([]models.Release, len(releases))
+	copy(sorted, releases)
 
-	// Sort releases by version (newest first)
-	sortedReleases := make([]models.Release, len(releases))
-	copy(sortedReleases, releases)
-
-	sort.Slice(sortedReleases, func(i, j int) bool {
-		// Compare by major, minor, patch
-		if sortedReleases[i].Major != sortedReleases[j].Major {
-			return sortedReleases[i].Major > sortedReleases[j].Major
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Major != sorted[j].Major {
+			return sorted[i].Major > sorted[j].Major
 		}
-		if sortedReleases[i].Minor != sortedReleases[j].Minor {
-			return sortedReleases[i].Minor > sortedReleases[j].Minor
+		if sorted[i].Minor != sorted[j].Minor {
+			return sorted[i].Minor > sorted[j].Minor
 		}
-		return sortedReleases[i].Patch > sortedReleases[j].Patch
+		return sorted[i].Patch > sorted[j].Patch
 	})
 
-	// Find highest minor for each major version
-	highestMinorForMajor := make(map[int]int)
+	return sorted
+}
 
-	for _, r := range sortedReleases {
-		if highest, exists := highestMinorForMajor[r.Major]; !exists || r.Minor > highest {
-			highestMinorForMajor[r.Major] = r.Minor
-		}
+// versionInfo holds precomputed version information for retention decisions
+type versionInfo struct {
+	highestMinorForMajor  map[int]int
+	highestPatchForMinor  map[[2]int]int
+}
+
+// calculateVersionInfo precomputes version information for retention decisions
+func calculateVersionInfo(sortedReleases []models.Release) versionInfo {
+	info := versionInfo{
+		highestMinorForMajor: make(map[int]int),
+		highestPatchForMinor: make(map[[2]int]int),
 	}
 
-	// Find the highest patch for each major.minor
-	highestPatchForMinor := make(map[[2]int]int)
 	for _, r := range sortedReleases {
+		if highest, exists := info.highestMinorForMajor[r.Major]; !exists || r.Minor > highest {
+			info.highestMinorForMajor[r.Major] = r.Minor
+		}
+
 		key := [2]int{r.Major, r.Minor}
-		if highest, exists := highestPatchForMinor[key]; !exists || r.Patch > highest {
-			highestPatchForMinor[key] = r.Patch
+		if highest, exists := info.highestPatchForMinor[key]; !exists || r.Patch > highest {
+			info.highestPatchForMinor[key] = r.Patch
 		}
 	}
 
-	// Mark releases to keep
+	return info
+}
+
+// determineKeepReleases determines which releases to keep based on policy
+func (p *Policy) determineKeepReleases(sortedReleases []models.Release, info versionInfo) map[int64]bool {
 	keepReleases := make(map[int64]bool)
 
 	for i, r := range sortedReleases {
@@ -73,12 +80,24 @@ func (p *Policy) DetermineAssetsToDelete(releases []models.Release, assets []mod
 		if p.KeepLastMajor {
 			key := [2]int{r.Major, r.Minor}
 			// Keep if this is the highest patch for this major.minor
-			if r.Patch == highestPatchForMinor[key] && r.Minor == highestMinorForMajor[r.Major] {
+			if r.Patch == info.highestPatchForMinor[key] && r.Minor == info.highestMinorForMajor[r.Major] {
 				keepReleases[r.ID] = true
-				continue
 			}
 		}
 	}
+
+	return keepReleases
+}
+
+// DetermineAssetsToDelete determines which assets should be deleted based on retention policy
+func (p *Policy) DetermineAssetsToDelete(releases []models.Release, assets []models.Asset) []models.Asset {
+	if len(releases) == 0 || len(assets) == 0 {
+		return nil
+	}
+
+	sortedReleases := sortReleasesByVersion(releases)
+	info := calculateVersionInfo(sortedReleases)
+	keepReleases := p.determineKeepReleases(sortedReleases, info)
 
 	// Find assets to delete
 	var toDelete []models.Asset
@@ -97,53 +116,9 @@ func (p *Policy) FilterReleasesToKeep(releases []models.Release) []models.Releas
 		return releases
 	}
 
-	// Sort releases by version (newest first)
-	sortedReleases := make([]models.Release, len(releases))
-	copy(sortedReleases, releases)
-
-	sort.Slice(sortedReleases, func(i, j int) bool {
-		if sortedReleases[i].Major != sortedReleases[j].Major {
-			return sortedReleases[i].Major > sortedReleases[j].Major
-		}
-		if sortedReleases[i].Minor != sortedReleases[j].Minor {
-			return sortedReleases[i].Minor > sortedReleases[j].Minor
-		}
-		return sortedReleases[i].Patch > sortedReleases[j].Patch
-	})
-
-	// Find releases to keep
-	keepReleases := make(map[int64]bool)
-
-	// Find highest minor for each major
-	highestMinorForMajor := make(map[int]int)
-	for _, r := range sortedReleases {
-		if highest, exists := highestMinorForMajor[r.Major]; !exists || r.Minor > highest {
-			highestMinorForMajor[r.Major] = r.Minor
-		}
-	}
-
-	// Find highest patch for each major.minor
-	highestPatchForMinor := make(map[[2]int]int)
-	for _, r := range sortedReleases {
-		key := [2]int{r.Major, r.Minor}
-		if highest, exists := highestPatchForMinor[key]; !exists || r.Patch > highest {
-			highestPatchForMinor[key] = r.Patch
-		}
-	}
-
-	for i, r := range sortedReleases {
-		if i < p.MaxVersions {
-			keepReleases[r.ID] = true
-			continue
-		}
-
-		if p.KeepLastMajor {
-			key := [2]int{r.Major, r.Minor}
-			if r.Patch == highestPatchForMinor[key] && r.Minor == highestMinorForMajor[r.Major] {
-				keepReleases[r.ID] = true
-			}
-		}
-	}
+	sortedReleases := sortReleasesByVersion(releases)
+	info := calculateVersionInfo(sortedReleases)
+	keepReleases := p.determineKeepReleases(sortedReleases, info)
 
 	var result []models.Release
 	for _, r := range releases {

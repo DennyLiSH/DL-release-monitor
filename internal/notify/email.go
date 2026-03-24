@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/smtp"
+	"time"
 )
 
 // EmailNotifier sends notifications via email
@@ -147,12 +148,18 @@ func (n *EmailNotifier) buildBody(notification *Notification) string {
 
 // WebhookNotifier sends notifications via HTTP webhook
 type WebhookNotifier struct {
-	url string
+	url    string
+	client *http.Client
 }
 
 // NewWebhookNotifier creates a new webhook notifier
 func NewWebhookNotifier(url string) *WebhookNotifier {
-	return &WebhookNotifier{url: url}
+	return &WebhookNotifier{
+		url: url,
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
 }
 
 // Name returns the notifier name
@@ -174,7 +181,7 @@ func (n *WebhookNotifier) Send(notification *Notification) error {
 		return fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
 
-	resp, err := http.Post(n.url, "application/json", bytes.NewBuffer(jsonData))
+	resp, err := n.client.Post(n.url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("failed to send webhook: %w", err)
 	}

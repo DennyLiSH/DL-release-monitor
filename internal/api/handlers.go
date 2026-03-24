@@ -391,6 +391,40 @@ func (r *Router) GetStatus(w http.ResponseWriter, req *http.Request) {
 	r.writeJSON(w, http.StatusOK, status)
 }
 
+// HealthCheck returns basic health status
+func (r *Router) HealthCheck(w http.ResponseWriter, req *http.Request) {
+	r.writeJSON(w, http.StatusOK, map[string]string{
+		"status": "ok",
+	})
+}
+
+// ReadyCheck returns readiness status (checks database connection)
+func (r *Router) ReadyCheck(w http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+
+	// Check database connectivity
+	sqlDB, err := r.db.DB()
+	if err != nil {
+		r.writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"status": "not_ready",
+			"error":  "failed to get database connection",
+		})
+		return
+	}
+
+	if err := sqlDB.PingContext(ctx); err != nil {
+		r.writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+			"status": "not_ready",
+			"error":  "database ping failed",
+		})
+		return
+	}
+
+	r.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"status": "ready",
+	})
+}
+
 // writeJSON writes JSON response
 func (r *Router) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

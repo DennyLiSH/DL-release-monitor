@@ -56,6 +56,10 @@ func NewRouter(db *gorm.DB, ghClient *github.Client, sched *scheduler.Scheduler,
 
 	// Routes
 	r.Route("/api", func(r chi.Router) {
+		// Health check endpoints (no auth required)
+		r.Get("/health", router.HealthCheck)
+		r.Get("/ready", router.ReadyCheck)
+
 		// Repository endpoints
 		r.Get("/repos", router.ListRepos)
 		r.Post("/repos", router.CreateRepo)

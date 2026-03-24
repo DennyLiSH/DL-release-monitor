@@ -148,7 +148,12 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 
 // GetLatestRelease fetches the latest release for a repository
 func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*ReleaseInfo, error) {
-	time.Sleep(apiRequestDelay)
+	// Add delay between requests to avoid secondary rate limits (context-aware)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(apiRequestDelay):
+	}
 
 	r, _, err := c.client.Repositories.GetLatestRelease(ctx, owner, repo)
 	if err != nil {
@@ -184,7 +189,12 @@ func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*Rel
 
 // ValidateRepo checks if a repository exists and is accessible
 func (c *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
-	time.Sleep(apiRequestDelay)
+	// Add delay between requests to avoid secondary rate limits (context-aware)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(apiRequestDelay):
+	}
 
 	_, _, err := c.client.Repositories.Get(ctx, owner, repo)
 	if err != nil {

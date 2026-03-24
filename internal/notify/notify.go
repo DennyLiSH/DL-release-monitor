@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"fmt"
 	"log"
 )
 
@@ -37,12 +38,18 @@ func (m *Manager) AddNotifier(notifier Notifier) {
 
 // Send sends notification through all configured backends
 // Notifications are sent sequentially to avoid overwhelming external services
-func (m *Manager) Send(notification *Notification) {
+// Returns a slice of errors from failed notifications (nil if all succeeded)
+func (m *Manager) Send(notification *Notification) []error {
+	var errs []error
+
 	for _, n := range m.notifiers {
 		if err := n.Send(notification); err != nil {
 			log.Printf("[%s] Failed to send notification: %v", n.Name(), err)
+			errs = append(errs, fmt.Errorf("[%s]: %w", n.Name(), err))
 		} else {
 			log.Printf("[%s] Notification sent for %s %s", n.Name(), notification.RepoName, notification.Version)
 		}
 	}
+
+	return errs
 }

@@ -312,12 +312,15 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 
 		// Send notification if assets were downloaded
 		if len(downloadedAssets) > 0 && s.notifyMgr != nil {
-			s.notifyMgr.Send(&notify.Notification{
+			errs := s.notifyMgr.Send(&notify.Notification{
 				RepoName:   repo.FullName,
 				Version:    newRelease.Version,
 				AssetNames: downloadedAssets,
 				HTMLURL:    newRelease.HTMLURL,
 			})
+			if len(errs) > 0 {
+				log.Printf("[%s] Some notifications failed: %v", repo.FullName, errs)
+			}
 		}
 	}
 
