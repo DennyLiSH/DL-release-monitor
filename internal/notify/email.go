@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/smtp"
 )
@@ -177,13 +178,10 @@ func (n *WebhookNotifier) Send(notification *Notification) error {
 	if err != nil {
 		return fmt.Errorf("failed to send webhook: %w", err)
 	}
+	defer resp.Body.Close()
 
-	// Always close response body
-	defer func() {
-		if resp != nil && resp.Body != nil {
-			resp.Body.Close()
-		}
-	}()
+	// Read and discard response body to ensure connection can be reused
+	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)

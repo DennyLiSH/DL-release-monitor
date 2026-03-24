@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 )
 
@@ -14,7 +15,9 @@ func (r *Router) ServeIndex(w http.ResponseWriter, req *http.Request) {
 
 	// Serve the embedded index.html
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(indexHTML)
+	if _, err := w.Write(indexHTML); err != nil {
+		log.Printf("Failed to write index.html: %v", err)
+	}
 }
 
 // indexHTML is the embedded web UI

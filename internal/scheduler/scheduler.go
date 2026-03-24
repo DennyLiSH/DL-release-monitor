@@ -26,7 +26,8 @@ type Scheduler struct {
 	storage   *storage.LocalStorage
 	notifyMgr *notify.Manager
 	parser    *release.Parser
-	stopChan  chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	mu        sync.Mutex
 	running   bool
@@ -36,11 +37,13 @@ type Scheduler struct {
 
 // New creates a new scheduler
 func New(db *gorm.DB, ghClient *github.Client, cfg *config.Config) *Scheduler {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		db:       db,
 		ghClient: ghClient,
 		cfg:      cfg,
-		stopChan: make(chan struct{}),
+		ctx:      ctx,
+		cancel:   cancel,
 	}
 }
 
@@ -85,6 +88,8 @@ func (s *Scheduler) Start() {
 		s.mu.Unlock()
 		return
 	}
+	// Reset context to allow restart after Stop()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
 	s.running = true
 	s.mu.Unlock()
 
@@ -114,7 +119,7 @@ func (s *Scheduler) Stop() {
 	s.running = false
 	s.mu.Unlock()
 
-	close(s.stopChan)
+	s.cancel()
 	s.wg.Wait()
 	log.Println("Scheduler stopped")
 }
@@ -131,7 +136,7 @@ func (s *Scheduler) run() {
 
 	for {
 		select {
-		case <-s.stopChan:
+		case <-s.ctx.Done():
 			return
 		case <-ticker.C:
 			s.checkAllRepos()
@@ -200,7 +205,7 @@ func (s *Scheduler) checkAllRepos() {
 
 	for i := range repos {
 		select {
-		case <-s.stopChan:
+		case <-s.ctx.Done():
 			return
 		default:
 			s.checkRepo(&repos[i])
@@ -212,7 +217,7 @@ func (s *Scheduler) checkAllRepos() {
 func (s *Scheduler) checkRepo(repo *models.Repo) {
 	// Check if scheduler is stopping
 	select {
-	case <-s.stopChan:
+	case <-s.ctx.Done():
 		return
 	default:
 	}
@@ -327,7 +332,8 @@ func (s *Scheduler) downloadAsset(repo *models.Repo, rel *models.Release, asset 
 		log.Printf("[%s] Failed to update asset status to downloading: %v", repo.FullName, err)
 	}
 
-	localPath, sha256sum, duration, err := s.storage.Download(asset.DownloadURL, repo.FullName, asset.Name)
+	// Use scheduler's context for cancellation support
+	localPath, sha256sum, duration, err := s.storage.Download(s.ctx, asset.DownloadURL, repo.FullName, asset.Name)
 	if err != nil {
 		if err := s.db.Model(asset).Updates(map[string]interface{}{
 			"status":        models.AssetStatusFailed,

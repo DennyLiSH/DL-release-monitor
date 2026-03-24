@@ -1,0 +1,39 @@
+run:
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+
+linters:
+  enable:
+    - errcheck      # 检查未处理的错误
+    - gosimple      # 简化代码建议
+    - govet         # Go vet 检查
+    - ineffassign   # 检测无效赋值
+    - staticcheck   # 静态分析
+    - unused        # 未使用的代码
+    - gofmt         # 格式检查
+    - goimports     # import 顺序检查
+    - misspell      # 拼写检查
+    - revive        # 代码风格检查
+    - bodyclose     # 检查 response body 是否关闭
+    - contextcheck  # 检查 context 传递
+    - sqlclosecheck # 检查 SQL rows 是否关闭
+    - noctx         # 检查 HTTP 请求是否有 context
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: true
+
+  revive:
+    rules:
+      - name: error-strings
+      - name: error-naming
+      - name: var-naming
+      - name: exported
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck

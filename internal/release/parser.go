@@ -1,6 +1,7 @@
 package release
 
 import (
+	"log"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -37,13 +38,24 @@ func (p *Parser) ParseVersion(tagName string) (version string, major, minor, pat
 		return version, 0, 0, 0
 	}
 
-	// Regex guarantees these are numeric strings, so Atoi errors are safe to ignore
-	major, _ = strconv.Atoi(matches[1])
+	// Parse version parts with defensive error logging
+	// Regex guarantees these are numeric strings, but log unexpected errors
+	var err error
+	major, err = strconv.Atoi(matches[1])
+	if err != nil {
+		log.Printf("Warning: unexpected parse error for major version %q: %v", matches[1], err)
+	}
 	if matches[2] != "" {
-		minor, _ = strconv.Atoi(matches[2])
+		minor, err = strconv.Atoi(matches[2])
+		if err != nil {
+			log.Printf("Warning: unexpected parse error for minor version %q: %v", matches[2], err)
+		}
 	}
 	if matches[3] != "" {
-		patch, _ = strconv.Atoi(matches[3])
+		patch, err = strconv.Atoi(matches[3])
+		if err != nil {
+			log.Printf("Warning: unexpected parse error for patch version %q: %v", matches[3], err)
+		}
 	}
 
 	return version, major, minor, patch
@@ -130,11 +142,18 @@ func CompareVersions(v1, v2 string) int {
 
 	for i := 0; i < maxLen; i++ {
 		var n1, n2 int
+		var err error
 		if i < len(v1Parts) {
-			n1, _ = strconv.Atoi(v1Parts[i])
+			n1, err = strconv.Atoi(v1Parts[i])
+			if err != nil {
+				log.Printf("Warning: version parse error for %q: %v", v1Parts[i], err)
+			}
 		}
 		if i < len(v2Parts) {
-			n2, _ = strconv.Atoi(v2Parts[i])
+			n2, err = strconv.Atoi(v2Parts[i])
+			if err != nil {
+				log.Printf("Warning: version parse error for %q: %v", v2Parts[i], err)
+			}
 		}
 
 		if n1 < n2 {

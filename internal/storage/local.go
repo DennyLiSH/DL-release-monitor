@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,9 +38,14 @@ func NewLocalStorage(basePath string) (*LocalStorage, error) {
 	}, nil
 }
 
-// Download downloads a file from URL to local storage
-func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha256sum string, duration int64, err error) {
+// Download downloads a file from URL to local storage with context support
+func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename string) (localPath, sha256sum string, duration int64, err error) {
 	start := time.Now()
+
+	// Check context before starting
+	if err := ctx.Err(); err != nil {
+		return "", "", 0, fmt.Errorf("download canceled: %w", err)
+	}
 
 	// Create repo directory
 	repoDir := filepath.Join(s.basePath, sanitizePath(repoName))
@@ -55,8 +62,8 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 	// Destination path
 	destPath := filepath.Join(repoDir, safeFilename)
 
-	// Create HTTP request with GitHub token in header for private repos
-	req, err := http.NewRequest("GET", url, nil)
+	// Create HTTP request with context for cancellation support
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -65,6 +72,9 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 	// Download file using configured client
 	resp, err := s.downloadClient.Do(req)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return "", "", 0, fmt.Errorf("download canceled: %w", err)
+		}
 		return "", "", 0, fmt.Errorf("failed to download: %w", err)
 	}
 	defer resp.Body.Close()
@@ -88,6 +98,9 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 	if err != nil {
 		out.Close()
 		os.Remove(tmpPath)
+		if errors.Is(err, context.Canceled) {
+			return "", "", 0, fmt.Errorf("download canceled during write: %w", err)
+		}
 		return "", "", 0, fmt.Errorf("failed to write file: %w", err)
 	}
 
