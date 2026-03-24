@@ -24,11 +24,26 @@ func main() {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
+	// Validate configuration
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Invalid configuration: %v", err)
+	}
+
 	// Initialize database
 	db, err := database.Init(cfg.Storage.Local.Path)
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
+	defer func() {
+		sqlDB, err := db.DB()
+		if err != nil {
+			log.Printf("Failed to get underlying DB: %v", err)
+			return
+		}
+		if err := sqlDB.Close(); err != nil {
+			log.Printf("Failed to close database: %v", err)
+		}
+	}()
 
 	// Create GitHub client
 	ghClient := github.NewClient(cfg.GitHub.Token)

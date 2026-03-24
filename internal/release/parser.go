@@ -9,6 +9,14 @@ import (
 	"gh-release-monitor/internal/models"
 )
 
+// Pre-compiled regex patterns for better performance
+var (
+	// semverRegex matches semantic versioning: major.minor.patch with optional pre-release
+	semverRegex = regexp.MustCompile(`^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$`)
+	// versionPartRegex matches numeric parts for version comparison
+	versionPartRegex = regexp.MustCompile(`(\d+)`)
+)
+
 // Parser handles release parsing
 type Parser struct{}
 
@@ -22,14 +30,14 @@ func (p *Parser) ParseVersion(tagName string) (version string, major, minor, pat
 	// Remove 'v' prefix
 	version = strings.TrimPrefix(tagName, "v")
 
-	// Regex for semver: major.minor.patch with optional pre-release
-	re := regexp.MustCompile(`^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$`)
-	matches := re.FindStringSubmatch(version)
+	// Use pre-compiled regex for semver parsing
+	matches := semverRegex.FindStringSubmatch(version)
 
 	if matches == nil {
 		return version, 0, 0, 0
 	}
 
+	// Regex guarantees these are numeric strings, so Atoi errors are safe to ignore
 	major, _ = strconv.Atoi(matches[1])
 	if matches[2] != "" {
 		minor, _ = strconv.Atoi(matches[2])
@@ -61,13 +69,13 @@ func (p *Parser) GetAssetType(filename string) string {
 
 	// Installers
 	installerExts := map[string]bool{
-		".exe":  true,
-		".msi":  true,
-		".dmg":  true,
-		".pkg":  true,
-		".deb":  true,
-		".rpm":  true,
-		".apk":  true,
+		".exe": true,
+		".msi": true,
+		".dmg": true,
+		".pkg": true,
+		".deb": true,
+		".rpm": true,
+		".apk": true,
 	}
 	if installerExts[ext] {
 		return models.AssetTypeInstaller
@@ -111,11 +119,9 @@ func (p *Parser) ShouldDownloadAsset(assetType string) bool {
 // CompareVersions compares two version strings
 // Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
 func CompareVersions(v1, v2 string) int {
-	// Parse both versions
-	re := regexp.MustCompile(`(\d+)`)
-
-	v1Parts := re.FindAllString(v1, -1)
-	v2Parts := re.FindAllString(v2, -1)
+	// Use pre-compiled regex for version parsing
+	v1Parts := versionPartRegex.FindAllString(v1, -1)
+	v2Parts := versionPartRegex.FindAllString(v2, -1)
 
 	maxLen := len(v1Parts)
 	if len(v2Parts) > maxLen {

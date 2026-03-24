@@ -1,6 +1,9 @@
 package api
 
 import (
+	"sync"
+	"time"
+
 	"gh-release-monitor/internal/config"
 	"gh-release-monitor/internal/github"
 	"gh-release-monitor/internal/scheduler"
@@ -14,10 +17,12 @@ import (
 // Router wraps the chi router
 type Router struct {
 	*chi.Mux
-	db       *gorm.DB
-	ghClient *github.Client
-	sched    *scheduler.Scheduler
-	cfg      *config.Config
+	db        *gorm.DB
+	ghClient  *github.Client
+	sched     *scheduler.Scheduler
+	cfg       *config.Config
+	cfgMu     sync.RWMutex // protects cfg access
+	startTime time.Time
 }
 
 // NewRouter creates a new API router
@@ -25,11 +30,12 @@ func NewRouter(db *gorm.DB, ghClient *github.Client, sched *scheduler.Scheduler,
 	r := chi.NewRouter()
 
 	router := &Router{
-		Mux:      r,
-		db:       db,
-		ghClient: ghClient,
-		sched:    sched,
-		cfg:      cfg,
+		Mux:       r,
+		db:        db,
+		ghClient:  ghClient,
+		sched:     sched,
+		cfg:       cfg,
+		startTime: time.Now(),
 	}
 
 	// Middleware
@@ -44,7 +50,7 @@ func NewRouter(db *gorm.DB, ghClient *github.Client, sched *scheduler.Scheduler,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
 		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: true,
+		AllowCredentials: false,
 		MaxAge:           300,
 	}))
 

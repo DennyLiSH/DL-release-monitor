@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,10 +17,11 @@ type EmailNotifier struct {
 	password string
 	from     string
 	to       string
+	useTLS   bool
 }
 
 // NewEmailNotifier creates a new email notifier
-func NewEmailNotifier(host string, port int, username, password, from, to string) *EmailNotifier {
+func NewEmailNotifier(host string, port int, username, password, from, to string, useTLS bool) *EmailNotifier {
 	return &EmailNotifier{
 		host:     host,
 		port:     port,
@@ -27,6 +29,7 @@ func NewEmailNotifier(host string, port int, username, password, from, to string
 		password: password,
 		from:     from,
 		to:       to,
+		useTLS:   useTLS,
 	}
 }
 
@@ -51,6 +54,11 @@ func (n *EmailNotifier) Send(notification *Notification) error {
 
 	addr := fmt.Sprintf("%s:%d", n.host, n.port)
 
+	if n.useTLS {
+		return n.sendWithTLS(addr, msg.Bytes())
+	}
+
+	// Fallback to standard SendMail (for backwards compatibility)
 	var auth smtp.Auth
 	if n.username != "" && n.password != "" {
 		auth = smtp.PlainAuth("", n.username, n.password, n.host)
@@ -61,6 +69,60 @@ func (n *EmailNotifier) Send(notification *Notification) error {
 	}
 
 	return nil
+}
+
+// sendWithTLS sends email using explicit TLS connection
+func (n *EmailNotifier) sendWithTLS(addr string, msg []byte) error {
+	// TLS config with server name verification
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: false,
+		ServerName:         n.host,
+		MinVersion:         tls.VersionTLS12,
+	}
+
+	// Connect with TLS using tls.Dial
+	conn, err := tls.Dial("tcp", addr, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to connect to SMTP server: %w", err)
+	}
+
+	client, err := smtp.NewClient(conn, n.host)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("failed to create SMTP client: %w", err)
+	}
+	defer client.Close()
+
+	// Authenticate if credentials provided
+	if n.username != "" && n.password != "" {
+		auth := smtp.PlainAuth("", n.username, n.password, n.host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("SMTP authentication failed: %w", err)
+		}
+	}
+
+	// Set sender and recipient
+	if err := client.Mail(n.from); err != nil {
+		return fmt.Errorf("failed to set sender: %w", err)
+	}
+	if err := client.Rcpt(n.to); err != nil {
+		return fmt.Errorf("failed to set recipient: %w", err)
+	}
+
+	// Send data
+	writer, err := client.Data()
+	if err != nil {
+		return fmt.Errorf("failed to get data writer: %w", err)
+	}
+	_, err = writer.Write(msg)
+	if err != nil {
+		return fmt.Errorf("failed to write message: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	return client.Quit()
 }
 
 func (n *EmailNotifier) buildBody(notification *Notification) string {
@@ -115,7 +177,13 @@ func (n *WebhookNotifier) Send(notification *Notification) error {
 	if err != nil {
 		return fmt.Errorf("failed to send webhook: %w", err)
 	}
-	defer resp.Body.Close()
+
+	// Always close response body
+	defer func() {
+		if resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)

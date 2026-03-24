@@ -12,9 +12,13 @@ import (
 	"time"
 )
 
+// Default download timeout
+const DefaultDownloadTimeout = 10 * time.Minute
+
 // LocalStorage handles local file storage
 type LocalStorage struct {
-	basePath string
+	basePath       string
+	downloadClient *http.Client
 }
 
 // NewLocalStorage creates a new local storage
@@ -24,7 +28,12 @@ func NewLocalStorage(basePath string) (*LocalStorage, error) {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
 
-	return &LocalStorage{basePath: basePath}, nil
+	return &LocalStorage{
+		basePath: basePath,
+		downloadClient: &http.Client{
+			Timeout: DefaultDownloadTimeout,
+		},
+	}, nil
 }
 
 // Download downloads a file from URL to local storage
@@ -37,8 +46,14 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 		return "", "", 0, fmt.Errorf("failed to create repo directory: %w", err)
 	}
 
+	// Sanitize filename to prevent path traversal
+	safeFilename := sanitizeFilename(filename)
+	if safeFilename == "" {
+		return "", "", 0, fmt.Errorf("invalid filename: %s", filename)
+	}
+
 	// Destination path
-	destPath := filepath.Join(repoDir, filename)
+	destPath := filepath.Join(repoDir, safeFilename)
 
 	// Create HTTP request with GitHub token in header for private repos
 	req, err := http.NewRequest("GET", url, nil)
@@ -47,9 +62,8 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 
-	// Download file
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Do(req)
+	// Download file using configured client
+	resp, err := s.downloadClient.Do(req)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("failed to download: %w", err)
 	}
@@ -59,12 +73,12 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 		return "", "", 0, fmt.Errorf("download failed with status: %s", resp.Status)
 	}
 
-	// Create destination file
-	out, err := os.Create(destPath)
+	// Write to temp file first, then atomic rename to avoid partial writes
+	tmpPath := destPath + ".tmp"
+	out, err := os.Create(tmpPath)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("failed to create file: %w", err)
+		return "", "", 0, fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer out.Close()
 
 	// Calculate SHA256 while downloading
 	hash := sha256.New()
@@ -72,8 +86,21 @@ func (s *LocalStorage) Download(url, repoName, filename string) (localPath, sha2
 
 	_, err = io.Copy(writer, resp.Body)
 	if err != nil {
-		os.Remove(destPath)
+		out.Close()
+		os.Remove(tmpPath)
 		return "", "", 0, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Close file before renaming
+	if err := out.Close(); err != nil {
+		os.Remove(tmpPath)
+		return "", "", 0, fmt.Errorf("failed to close file: %w", err)
+	}
+
+	// Atomic rename from temp to final destination
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		os.Remove(tmpPath)
+		return "", "", 0, fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
 	sha256sum = hex.EncodeToString(hash.Sum(nil))
@@ -139,12 +166,10 @@ func (s *LocalStorage) DiskUsage() (int64, error) {
 	return totalSize, err
 }
 
-// AvailableSpace returns available disk space (platform-dependent)
-// For MVP, this returns 0. Can be enhanced with platform-specific implementations.
+// AvailableSpace returns available disk space
+// Platform-specific implementations are in local_space_*.go files
 func (s *LocalStorage) AvailableSpace() (uint64, error) {
-	// TODO: Implement platform-specific disk space check
-	// For now, return 0 to indicate unknown
-	return 0, nil
+	return availableSpace(s.basePath)
 }
 
 // sanitizePath removes potentially dangerous characters from path components
@@ -156,4 +181,28 @@ func sanitizePath(path string) string {
 		"..", "_",
 	)
 	return replacer.Replace(path)
+}
+
+// sanitizeFilename cleans a filename to prevent path traversal attacks
+func sanitizeFilename(filename string) string {
+	// Use filepath.Base to strip any directory components
+	filename = filepath.Base(filename)
+
+	// Remove null bytes and other control characters
+	var sb strings.Builder
+	for _, r := range filename {
+		if r == 0 || (r < 32 && r != '\t') {
+			continue
+		}
+		sb.WriteRune(r)
+	}
+
+	result := sb.String()
+
+	// Don't allow empty filenames or just dots
+	if result == "" || result == "." || result == ".." {
+		return ""
+	}
+
+	return result
 }

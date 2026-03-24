@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -63,10 +65,6 @@ func (r *Router) CreateRepo(w http.ResponseWriter, req *http.Request) {
 		Retention:     input.Retention,
 	}
 
-	if repo.Enabled {
-		repo.Enabled = true // default to true
-	}
-
 	if err := r.db.Create(&repo).Error; err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			r.writeError(w, http.StatusConflict, "Repository already exists")
@@ -98,7 +96,9 @@ func (r *Router) GetRepo(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Load releases
-	r.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Limit(10).Find(&repo.Releases)
+	if err := r.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Limit(10).Find(&repo.Releases).Error; err != nil {
+		log.Printf("Failed to load releases for repo %d: %v", repo.ID, err)
+	}
 
 	r.writeJSON(w, http.StatusOK, repo)
 }
@@ -171,22 +171,44 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// Delete associated assets' files
+	// Delete associated assets' files (before transaction)
 	var assets []models.Asset
-	r.db.Joins("JOIN releases ON releases.id = assets.release_id").
+	if err := r.db.Joins("JOIN releases ON releases.id = assets.release_id").
 		Where("releases.repo_id = ?", repo.ID).
-		Find(&assets)
+		Find(&assets).Error; err != nil {
+		log.Printf("Failed to fetch assets for deletion: %v", err)
+	}
 
-	storage, _ := storage.NewLocalStorage(r.cfg.Storage.Local.Path)
-	for _, asset := range assets {
-		if asset.LocalPath != "" {
-			storage.Delete(asset.LocalPath)
+	storageBackend, err := storage.NewLocalStorage(r.cfg.Storage.Local.Path)
+	if err != nil {
+		log.Printf("Failed to initialize storage for deletion: %v", err)
+	} else {
+		for _, asset := range assets {
+			if asset.LocalPath != "" {
+				if err := storageBackend.Delete(asset.LocalPath); err != nil {
+					log.Printf("Failed to delete asset file %s: %v", asset.LocalPath, err)
+				}
+			}
 		}
 	}
 
-	// Delete from database (cascade)
-	r.db.Where("repo_id = ?", repo.ID).Delete(&models.Release{})
-	r.db.Delete(&repo)
+	// Delete from database with transaction to ensure atomicity
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		// Delete releases first (assets will cascade)
+		if err := tx.Where("repo_id = ?", repo.ID).Delete(&models.Release{}).Error; err != nil {
+			return fmt.Errorf("failed to delete releases: %w", err)
+		}
+		// Then delete the repo
+		if err := tx.Delete(&repo).Error; err != nil {
+			return fmt.Errorf("failed to delete repository: %w", err)
+		}
+		return nil
+	})
+
+	if err != nil {
+		r.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	r.writeJSON(w, http.StatusOK, map[string]string{"message": "Deleted"})
 }
@@ -243,6 +265,9 @@ func (r *Router) TriggerRepoCheck(w http.ResponseWriter, req *http.Request) {
 
 // GetConfig returns current configuration
 func (r *Router) GetConfig(w http.ResponseWriter, req *http.Request) {
+	r.cfgMu.RLock()
+	defer r.cfgMu.RUnlock()
+
 	// Return sanitized config (no secrets)
 	cfg := map[string]interface{}{
 		"server": map[string]interface{}{
@@ -288,6 +313,9 @@ func (r *Router) UpdateConfig(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	r.cfgMu.Lock()
+	defer r.cfgMu.Unlock()
+
 	if input.Retention != nil {
 		if input.Retention.MaxVersions != nil {
 			r.cfg.Retention.MaxVersions = *input.Retention.MaxVersions
@@ -307,37 +335,47 @@ func (r *Router) GetStatus(w http.ResponseWriter, req *http.Request) {
 	var assetCount int64
 	var downloadCount int64
 
-	r.db.Model(&models.Repo{}).Count(&repoCount)
-	r.db.Model(&models.Release{}).Count(&releaseCount)
-	r.db.Model(&models.Asset{}).Where("status = ?", models.AssetStatusDone).Count(&assetCount)
-	r.db.Model(&models.DownloadLog{}).Where("success = ?", true).Count(&downloadCount)
+	if err := r.db.Model(&models.Repo{}).Count(&repoCount).Error; err != nil {
+		log.Printf("Failed to count repos: %v", err)
+	}
+	if err := r.db.Model(&models.Release{}).Count(&releaseCount).Error; err != nil {
+		log.Printf("Failed to count releases: %v", err)
+	}
+	if err := r.db.Model(&models.Asset{}).Where("status = ?", models.AssetStatusDone).Count(&assetCount).Error; err != nil {
+		log.Printf("Failed to count assets: %v", err)
+	}
+	if err := r.db.Model(&models.DownloadLog{}).Where("success = ?", true).Count(&downloadCount).Error; err != nil {
+		log.Printf("Failed to count downloads: %v", err)
+	}
 
 	// Calculate storage usage
 	var storageSize int64
-	r.db.Model(&models.Asset{}).
+	if err := r.db.Model(&models.Asset{}).
 		Where("status = ?", models.AssetStatusDone).
-		Select("COALESCE(SUM(size), 0)").Row().Scan(&storageSize)
+		Select("COALESCE(SUM(size), 0)").Row().Scan(&storageSize); err != nil {
+		log.Printf("Failed to calculate storage size: %v", err)
+	}
 
 	status := map[string]interface{}{
-		"status":       "running",
-		"uptime":       time.Since(startTime).String(),
-		"repo_count":   repoCount,
-		"release_count": releaseCount,
-		"asset_count":  assetCount,
+		"status":         "running",
+		"uptime":         time.Since(r.startTime).String(),
+		"repo_count":     repoCount,
+		"release_count":  releaseCount,
+		"asset_count":    assetCount,
 		"download_count": downloadCount,
-		"storage_size": storageSize,
+		"storage_size":   storageSize,
 	}
 
 	r.writeJSON(w, http.StatusOK, status)
 }
 
-var startTime = time.Now()
-
 // writeJSON writes JSON response
 func (r *Router) writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		log.Printf("Failed to encode JSON response: %v", err)
+	}
 }
 
 // writeError writes error response

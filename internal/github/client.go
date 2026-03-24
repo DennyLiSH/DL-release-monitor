@@ -2,13 +2,26 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
 	gh "github.com/google/go-github/v62/github"
+)
+
+// API request delay to avoid secondary rate limits
+const apiRequestDelay = 1 * time.Second
+
+// Rate limit retry settings
+const (
+	maxRetries     = 3
+	initialBackoff = 1 * time.Second
+	maxBackoff     = 5 * time.Minute
+	backoffFactor  = 2.0
 )
 
 // Client wraps the GitHub API client
@@ -48,30 +61,34 @@ func (c *Client) GetReleaseList(ctx context.Context, owner, repo string) ([]Rele
 	var releases []ReleaseInfo
 	var err error
 
-	// Retry with backoff on rate limit
-	for retries := 0; retries < 3; retries++ {
+	backoff := initialBackoff
+	for retries := 0; retries < maxRetries; retries++ {
 		releases, err = c.fetchReleases(ctx, owner, repo)
 		if err == nil {
 			return releases, nil
 		}
 
-		// Check for rate limit
-		if isRateLimitError(err) {
-			waitTime := time.Duration(retries+1) * time.Minute
-			log.Printf("Rate limited, waiting %v before retry", waitTime)
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(waitTime):
-				continue
-			}
+		// Check if error is retryable
+		if !isRetryableError(err) {
+			return nil, fmt.Errorf("failed to fetch releases for %s/%s: %w", owner, repo, err)
 		}
 
-		// Non-rate-limit error, return immediately
-		return nil, fmt.Errorf("failed to fetch releases for %s/%s: %w", owner, repo, err)
+		log.Printf("Retryable error for %s/%s, waiting %v before retry %d/%d: %v",
+			owner, repo, backoff, retries+1, maxRetries, err)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+			// Exponential backoff with cap
+			backoff = time.Duration(float64(backoff) * backoffFactor)
+			if backoff > maxBackoff {
+				backoff = maxBackoff
+			}
+		}
 	}
 
-	return nil, err
+	return nil, fmt.Errorf("failed to fetch releases for %s/%s after %d retries: %w", owner, repo, maxRetries, err)
 }
 
 // fetchReleases fetches releases with pagination
@@ -80,8 +97,12 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 
 	opts := &gh.ListOptions{PerPage: 100}
 	for {
-		// Add delay between requests to avoid secondary rate limits
-		time.Sleep(1 * time.Second)
+		// Add delay between requests to avoid secondary rate limits (context-aware)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(apiRequestDelay):
+		}
 
 		ghReleases, resp, err := c.client.Repositories.ListReleases(ctx, owner, repo, opts)
 		if err != nil {
@@ -89,13 +110,17 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 		}
 
 		for _, r := range ghReleases {
+			var publishedAt time.Time
+			if r.PublishedAt != nil {
+				publishedAt = r.PublishedAt.Time
+			}
 			release := ReleaseInfo{
 				ID:          r.GetID(),
 				TagName:     r.GetTagName(),
 				Name:        r.GetName(),
 				Body:        r.GetBody(),
 				HTMLURL:     r.GetHTMLURL(),
-				PublishedAt: r.GetPublishedAt().Time,
+				PublishedAt: publishedAt,
 				Prerelease:  r.GetPrerelease(),
 				Draft:       r.GetDraft(),
 			}
@@ -123,20 +148,24 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 
 // GetLatestRelease fetches the latest release for a repository
 func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*ReleaseInfo, error) {
-	time.Sleep(1 * time.Second)
+	time.Sleep(apiRequestDelay)
 
 	r, _, err := c.client.Repositories.GetLatestRelease(ctx, owner, repo)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch latest release for %s/%s: %w", owner, repo, err)
 	}
 
+	var publishedAt time.Time
+	if r.PublishedAt != nil {
+		publishedAt = r.PublishedAt.Time
+	}
 	release := &ReleaseInfo{
 		ID:          r.GetID(),
 		TagName:     r.GetTagName(),
 		Name:        r.GetName(),
 		Body:        r.GetBody(),
 		HTMLURL:     r.GetHTMLURL(),
-		PublishedAt: r.GetPublishedAt().Time,
+		PublishedAt: publishedAt,
 		Prerelease:  r.GetPrerelease(),
 		Draft:       r.GetDraft(),
 	}
@@ -155,7 +184,7 @@ func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*Rel
 
 // ValidateRepo checks if a repository exists and is accessible
 func (c *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
-	time.Sleep(1 * time.Second)
+	time.Sleep(apiRequestDelay)
 
 	_, _, err := c.client.Repositories.Get(ctx, owner, repo)
 	if err != nil {
@@ -164,17 +193,40 @@ func (c *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
 	return nil
 }
 
-// isRateLimitError checks if the error is a rate limit error
-func isRateLimitError(err error) bool {
+// isRetryableError checks if the error is retryable (rate limit, network error, 5xx)
+func isRetryableError(err error) bool {
 	if err == nil {
 		return false
 	}
 
-	// Check for rate limit response
+	// Check for context cancellation
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	// Check for network errors (timeout, temporary, connection refused)
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return netErr.Timeout() || netErr.Temporary()
+	}
+
+	// Check for GitHub API rate limit response
 	if ghErr, ok := err.(*gh.ErrorResponse); ok {
+		// Rate limit (403 with rate limit message)
 		if ghErr.Response.StatusCode == http.StatusForbidden {
 			return strings.Contains(strings.ToLower(ghErr.Message), "rate limit")
 		}
+		// Server errors (5xx) are retryable
+		if ghErr.Response.StatusCode >= 500 && ghErr.Response.StatusCode < 600 {
+			return true
+		}
+	}
+
+	// Check for connection errors
+	if strings.Contains(err.Error(), "connection refused") ||
+		strings.Contains(err.Error(), "connection reset") ||
+		strings.Contains(err.Error(), "EOF") {
+		return true
 	}
 
 	return false

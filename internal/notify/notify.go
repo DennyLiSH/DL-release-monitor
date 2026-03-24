@@ -36,14 +36,13 @@ func (m *Manager) AddNotifier(notifier Notifier) {
 }
 
 // Send sends notification through all configured backends
+// Notifications are sent sequentially to avoid overwhelming external services
 func (m *Manager) Send(notification *Notification) {
 	for _, n := range m.notifiers {
-		go func(notifier Notifier) {
-			if err := notifier.Send(notification); err != nil {
-				log.Printf("[%s] Failed to send notification: %v", notifier.Name(), err)
-			} else {
-				log.Printf("[%s] Notification sent for %s %s", notifier.Name(), notification.RepoName, notification.Version)
-			}
-		}(n)
+		if err := n.Send(notification); err != nil {
+			log.Printf("[%s] Failed to send notification: %v", n.Name(), err)
+		} else {
+			log.Printf("[%s] Notification sent for %s %s", n.Name(), notification.RepoName, notification.Version)
+		}
 	}
 }

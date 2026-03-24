@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -19,16 +20,18 @@ import (
 
 // Scheduler handles periodic release checking
 type Scheduler struct {
-	db         *gorm.DB
-	ghClient   *github.Client
-	cfg        *config.Config
-	storage    *storage.LocalStorage
-	notifyMgr  *notify.Manager
-	parser     *release.Parser
-	stopChan   chan struct{}
-	wg         sync.WaitGroup
-	mu         sync.Mutex
-	running    bool
+	db        *gorm.DB
+	ghClient  *github.Client
+	cfg       *config.Config
+	storage   *storage.LocalStorage
+	notifyMgr *notify.Manager
+	parser    *release.Parser
+	stopChan  chan struct{}
+	wg        sync.WaitGroup
+	mu        sync.Mutex
+	running   bool
+	initOnce  sync.Once
+	initErr   error
 }
 
 // New creates a new scheduler
@@ -41,6 +44,40 @@ func New(db *gorm.DB, ghClient *github.Client, cfg *config.Config) *Scheduler {
 	}
 }
 
+// ensureInit ensures storage, notifyMgr, and parser are initialized
+func (s *Scheduler) ensureInit() error {
+	s.initOnce.Do(func() {
+		// Initialize storage
+		var err error
+		s.storage, err = storage.NewLocalStorage(s.cfg.Storage.Local.Path)
+		if err != nil {
+			s.initErr = fmt.Errorf("failed to initialize storage: %w", err)
+			return
+		}
+
+		// Initialize notification manager
+		s.notifyMgr = notify.NewManager()
+		if s.cfg.Notify.Email.Enabled {
+			s.notifyMgr.AddNotifier(notify.NewEmailNotifier(
+				s.cfg.Notify.Email.SMTPHost,
+				s.cfg.Notify.Email.SMTPPort,
+				s.cfg.Notify.Email.SMTPUser,
+				s.cfg.Notify.Email.SMTPPass,
+				s.cfg.Notify.Email.From,
+				s.cfg.Notify.Email.To,
+				s.cfg.Notify.Email.UseTLS,
+			))
+		}
+		if s.cfg.Notify.Webhook.Enabled {
+			s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(s.cfg.Notify.Webhook.URL))
+		}
+
+		// Initialize parser
+		s.parser = release.NewParser()
+	})
+	return s.initErr
+}
+
 // Start starts the scheduler
 func (s *Scheduler) Start() {
 	s.mu.Lock()
@@ -51,32 +88,14 @@ func (s *Scheduler) Start() {
 	s.running = true
 	s.mu.Unlock()
 
-	// Initialize storage
-	var err error
-	s.storage, err = storage.NewLocalStorage(s.cfg.Storage.Local.Path)
-	if err != nil {
-		log.Printf("Failed to initialize storage: %v", err)
+	// Initialize dependencies
+	if err := s.ensureInit(); err != nil {
+		log.Printf("Failed to initialize scheduler: %v", err)
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
 		return
 	}
-
-	// Initialize notification manager
-	s.notifyMgr = notify.NewManager()
-	if s.cfg.Notify.Email.Enabled {
-		s.notifyMgr.AddNotifier(notify.NewEmailNotifier(
-			s.cfg.Notify.Email.SMTPHost,
-			s.cfg.Notify.Email.SMTPPort,
-			s.cfg.Notify.Email.SMTPUser,
-			s.cfg.Notify.Email.SMTPPass,
-			s.cfg.Notify.Email.From,
-			s.cfg.Notify.Email.To,
-		))
-	}
-	if s.cfg.Notify.Webhook.Enabled {
-		s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(s.cfg.Notify.Webhook.URL))
-	}
-
-	// Initialize parser
-	s.parser = release.NewParser()
 
 	// Start main loop
 	s.wg.Add(1)
@@ -122,7 +141,24 @@ func (s *Scheduler) run() {
 
 // CheckNow triggers an immediate check of all repos
 func (s *Scheduler) CheckNow() {
-	go s.checkAllRepos()
+	// Ensure dependencies are initialized
+	if err := s.ensureInit(); err != nil {
+		log.Printf("Cannot check now: %v", err)
+		return
+	}
+
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.checkAllRepos()
+	}()
 }
 
 // CheckRepoNow triggers an immediate check of a specific repo
@@ -131,7 +167,24 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 	if err := s.db.First(&repo, repoID).Error; err != nil {
 		return err
 	}
-	go s.checkRepo(&repo)
+
+	// Ensure dependencies are initialized
+	if err := s.ensureInit(); err != nil {
+		return fmt.Errorf("cannot check repo: %w", err)
+	}
+
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.checkRepo(&repo)
+	}()
 	return nil
 }
 
@@ -157,6 +210,13 @@ func (s *Scheduler) checkAllRepos() {
 
 // checkRepo checks a single repo for new releases
 func (s *Scheduler) checkRepo(repo *models.Repo) {
+	// Check if scheduler is stopping
+	select {
+	case <-s.stopChan:
+		return
+	default:
+	}
+
 	ctx := context.Background()
 
 	// Get releases from GitHub
@@ -167,7 +227,9 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 	}
 
 	// Update last checked time
-	s.db.Model(repo).Update("last_checked_at", time.Now())
+	if err := s.db.Model(repo).Update("last_checked_at", time.Now()).Error; err != nil {
+		log.Printf("[%s] Failed to update last_checked_at: %v", repo.FullName, err)
+	}
 
 	log.Printf("[%s] Found %d releases", repo.FullName, len(releases))
 
@@ -261,18 +323,22 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 // downloadAsset downloads a single asset
 func (s *Scheduler) downloadAsset(repo *models.Repo, rel *models.Release, asset *models.Asset) {
 	// Mark as downloading
-	s.db.Model(asset).Update("status", models.AssetStatusDownloading)
+	if err := s.db.Model(asset).Update("status", models.AssetStatusDownloading).Error; err != nil {
+		log.Printf("[%s] Failed to update asset status to downloading: %v", repo.FullName, err)
+	}
 
 	localPath, sha256sum, duration, err := s.storage.Download(asset.DownloadURL, repo.FullName, asset.Name)
 	if err != nil {
-		s.db.Model(asset).Updates(map[string]interface{}{
+		if err := s.db.Model(asset).Updates(map[string]interface{}{
 			"status":        models.AssetStatusFailed,
 			"error_message": err.Error(),
-		})
+		}).Error; err != nil {
+			log.Printf("[%s] Failed to update asset failure status: %v", repo.FullName, err)
+		}
 		log.Printf("[%s] Failed to download %s: %v", repo.FullName, asset.Name, err)
 
 		// Log failure
-		s.db.Create(&models.DownloadLog{
+		if err := s.db.Create(&models.DownloadLog{
 			AssetID:  asset.ID,
 			RepoName: repo.FullName,
 			Version:  rel.Version,
@@ -281,19 +347,23 @@ func (s *Scheduler) downloadAsset(repo *models.Repo, rel *models.Release, asset 
 			Duration: duration,
 			Success:  false,
 			Error:    err.Error(),
-		})
+		}).Error; err != nil {
+			log.Printf("[%s] Failed to create download log: %v", repo.FullName, err)
+		}
 		return
 	}
 
 	// Update asset record
-	s.db.Model(asset).Updates(map[string]interface{}{
+	if err := s.db.Model(asset).Updates(map[string]interface{}{
 		"local_path": localPath,
 		"sha256":     sha256sum,
 		"status":     models.AssetStatusDone,
-	})
+	}).Error; err != nil {
+		log.Printf("[%s] Failed to update asset success status: %v", repo.FullName, err)
+	}
 
 	// Log success
-	s.db.Create(&models.DownloadLog{
+	if err := s.db.Create(&models.DownloadLog{
 		AssetID:  asset.ID,
 		RepoName: repo.FullName,
 		Version:  rel.Version,
@@ -301,7 +371,9 @@ func (s *Scheduler) downloadAsset(repo *models.Repo, rel *models.Release, asset 
 		FileSize: asset.Size,
 		Duration: duration,
 		Success:  true,
-	})
+	}).Error; err != nil {
+		log.Printf("[%s] Failed to create download log: %v", repo.FullName, err)
+	}
 
 	log.Printf("[%s] Downloaded %s (%d ms)", repo.FullName, asset.Name, duration)
 }
@@ -314,7 +386,10 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 
 	// Get all releases for this repo
 	var releases []models.Release
-	s.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Find(&releases)
+	if err := s.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Find(&releases).Error; err != nil {
+		log.Printf("[%s] Failed to fetch releases for retention: %v", repo.FullName, err)
+		return
+	}
 
 	if len(releases) <= maxVersions {
 		return
@@ -322,9 +397,12 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 
 	// Get all assets for this repo
 	var assets []models.Asset
-	s.db.Joins("JOIN releases ON releases.id = assets.release_id").
+	if err := s.db.Joins("JOIN releases ON releases.id = assets.release_id").
 		Where("releases.repo_id = ?", repo.ID).
-		Find(&assets)
+		Find(&assets).Error; err != nil {
+		log.Printf("[%s] Failed to fetch assets for retention: %v", repo.FullName, err)
+		return
+	}
 
 	// Determine what to delete
 	policy := retention.NewPolicy(maxVersions, keepLastMajor)
@@ -339,9 +417,13 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 				log.Printf("[%s] Deleted %s (retention policy)", repo.FullName, asset.Name)
 			}
 		}
-		s.db.Delete(&asset)
+		if err := s.db.Delete(&asset).Error; err != nil {
+			log.Printf("[%s] Failed to delete asset record: %v", repo.FullName, err)
+		}
 	}
 
 	// Delete releases with no assets
-	s.db.Where("repo_id = ? AND id NOT IN (SELECT DISTINCT release_id FROM assets)", repo.ID).Delete(&models.Release{})
+	if err := s.db.Where("repo_id = ? AND id NOT IN (SELECT DISTINCT release_id FROM assets)", repo.ID).Delete(&models.Release{}).Error; err != nil {
+		log.Printf("[%s] Failed to delete orphan releases: %v", repo.FullName, err)
+	}
 }

@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
+
+// envRegex matches ${VAR} or $VAR patterns for environment variable expansion
+var envRegex = regexp.MustCompile(`\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
 
 // Config represents the application configuration
 type Config struct {
@@ -44,7 +46,7 @@ type LocalStorageConfig struct {
 
 // RetentionConfig holds retention policy configuration
 type RetentionConfig struct {
-	MaxVersions   int  `yaml:"max_versions"`   // keep last N versions
+	MaxVersions   int  `yaml:"max_versions"`    // keep last N versions
 	KeepLastMajor bool `yaml:"keep_last_major"` // keep last of each major version
 }
 
@@ -63,6 +65,7 @@ type EmailConfig struct {
 	SMTPPass string `yaml:"smtp_pass"`
 	From     string `yaml:"from"`
 	To       string `yaml:"to"`
+	UseTLS   bool   `yaml:"use_tls"` // Use TLS for SMTP connection
 }
 
 // WebhookConfig holds webhook notification configuration
@@ -94,10 +97,7 @@ func Load(filename string) (*Config, error) {
 
 // expandEnv expands environment variables in the format ${VAR} or $VAR
 func expandEnv(s string) string {
-	// Match ${VAR} or $VAR
-	re := regexp.MustCompile(`\$\{([^}]+)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
-
-	return re.ReplaceAllStringFunc(s, func(match string) string {
+	return envRegex.ReplaceAllStringFunc(s, func(match string) string {
 		var name string
 		if strings.HasPrefix(match, "${") {
 			name = match[2 : len(match)-1]
@@ -173,8 +173,8 @@ func (c *Config) Validate() error {
 		if c.Notify.Email.SMTPHost == "" {
 			return fmt.Errorf("smtp_host is required when email notifications are enabled")
 		}
-		if c.Notify.Email.SMTPPort == 0 {
-			return fmt.Errorf("smtp_port is required when email notifications are enabled")
+		if c.Notify.Email.SMTPPort < 1 || c.Notify.Email.SMTPPort > 65535 {
+			return fmt.Errorf("invalid smtp_port: %d (must be 1-65535)", c.Notify.Email.SMTPPort)
 		}
 	}
 
@@ -192,38 +192,4 @@ func ParseRepoFullName(fullName string) (owner, repo string, err error) {
 		return "", "", fmt.Errorf("invalid repo format, expected 'owner/repo': %s", fullName)
 	}
 	return parts[0], parts[1], nil
-}
-
-// ParseVersion parses a version string into major, minor, patch components
-func ParseVersion(version string) (major, minor, patch int, err error) {
-	// Remove 'v' prefix if present
-	version = strings.TrimPrefix(version, "v")
-
-	parts := strings.Split(version, ".")
-	if len(parts) < 1 {
-		return 0, 0, 0, fmt.Errorf("invalid version format: %s", version)
-	}
-
-	major, err = strconv.Atoi(parts[0])
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("invalid major version: %s", parts[0])
-	}
-
-	if len(parts) > 1 {
-		minor, err = strconv.Atoi(parts[1])
-		if err != nil {
-			return major, 0, 0, nil // minor is optional
-		}
-	}
-
-	if len(parts) > 2 {
-		// Handle pre-release suffixes like "1.0.0-alpha"
-		patchStr := strings.Split(parts[2], "-")[0]
-		patch, err = strconv.Atoi(patchStr)
-		if err != nil {
-			return major, minor, 0, nil // patch is optional
-		}
-	}
-
-	return major, minor, patch, nil
 }
