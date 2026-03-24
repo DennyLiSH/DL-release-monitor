@@ -433,7 +433,7 @@ func TestParseRepoFullName(t *testing.T) {
 		{"missing slash", "invalid", "", "", true},
 		{"too many slashes", "owner/repo/extra", "", "", true},
 		{"empty string", "", "", "", true},
-		{"single slash", "/", "", "", false}, // Split returns ["", ""], len=2
+		{"single slash", "/", "", "", true}, // Split returns ["", ""], empty owner/repo is invalid
 	}
 
 	for _, tt := range tests {

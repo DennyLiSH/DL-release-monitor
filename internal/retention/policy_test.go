@@ -102,7 +102,7 @@ func TestCalculateVersionInfo(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		key      interface{}
+		key      any
 		expected int
 	}{
 		{"major 1 highest minor", [2]int{1, -1}, 1}, // highestMinorForMajor[1]

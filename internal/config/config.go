@@ -195,5 +195,8 @@ func ParseRepoFullName(fullName string) (owner, repo string, err error) {
 	if len(parts) != 2 {
 		return "", "", fmt.Errorf("invalid repo format, expected 'owner/repo': %s", fullName)
 	}
+	if parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("invalid repo format, owner and repo must be non-empty: %s", fullName)
+	}
 	return parts[0], parts[1], nil
 }

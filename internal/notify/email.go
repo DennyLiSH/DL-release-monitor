@@ -180,7 +180,7 @@ func (n *WebhookNotifier) Name() string {
 
 // Send sends a webhook notification
 func (n *WebhookNotifier) Send(notification *Notification) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"repo_name": notification.RepoName,
 		"version":   notification.Version,
 		"html_url":  notification.HTMLURL,

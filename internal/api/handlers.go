@@ -46,12 +46,12 @@ func (r *Router) ListRepos(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	r.writeJSON(w, http.StatusOK, map[string]interface{}{
-		"data":   repos,
-		"page":   page,
-		"limit":  limit,
-		"total":  total,
-		"pages":  (total + int64(limit) - 1) / int64(limit),
+	r.writeJSON(w, http.StatusOK, map[string]any{
+		"data":  repos,
+		"page":  page,
+		"limit": limit,
+		"total": total,
+		"pages": (total + int64(limit) - 1) / int64(limit),
 	})
 }
 
@@ -181,7 +181,7 @@ func (r *Router) UpdateRepo(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	updates := map[string]interface{}{}
+	updates := map[string]any{}
 	if input.Enabled != nil {
 		updates["enabled"] = *input.Enabled
 	}
@@ -329,7 +329,12 @@ func (r *Router) TriggerRepoCheck(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if err := r.sched.CheckRepoNow(id); err != nil {
-		r.writeError(w, http.StatusNotFound, "Repository not found")
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			r.writeError(w, http.StatusNotFound, "Repository not found")
+			return
+		}
+		// Return the actual error for other cases (e.g., initialization failure)
+		r.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -342,29 +347,29 @@ func (r *Router) GetConfig(w http.ResponseWriter, req *http.Request) {
 	defer r.cfgMu.RUnlock()
 
 	// Return sanitized config (no secrets)
-	cfg := map[string]interface{}{
-		"server": map[string]interface{}{
+	cfg := map[string]any{
+		"server": map[string]any{
 			"port":     r.cfg.Server.Port,
 			"base_url": r.cfg.Server.BaseURL,
 		},
-		"github": map[string]interface{}{
+		"github": map[string]any{
 			"poll_interval": r.cfg.GitHub.PollInterval,
 		},
-		"storage": map[string]interface{}{
-			"local": map[string]interface{}{
+		"storage": map[string]any{
+			"local": map[string]any{
 				"enabled": r.cfg.Storage.Local.Enabled,
 				"path":    r.cfg.Storage.Local.Path,
 			},
 		},
-		"retention": map[string]interface{}{
+		"retention": map[string]any{
 			"max_versions":    r.cfg.Retention.MaxVersions,
 			"keep_last_major": r.cfg.Retention.KeepLastMajor,
 		},
-		"notify": map[string]interface{}{
-			"email": map[string]interface{}{
+		"notify": map[string]any{
+			"email": map[string]any{
 				"enabled": r.cfg.Notify.Email.Enabled,
 			},
-			"webhook": map[string]interface{}{
+			"webhook": map[string]any{
 				"enabled": r.cfg.Notify.Webhook.Enabled,
 			},
 		},
@@ -440,7 +445,7 @@ func (r *Router) GetStatus(w http.ResponseWriter, req *http.Request) {
 		statusVal = "degraded"
 	}
 
-	status := map[string]interface{}{
+	status := map[string]any{
 		"status":         statusVal,
 		"uptime":         time.Since(r.startTime).String(),
 		"repo_count":     repoCount,
@@ -470,7 +475,7 @@ func (r *Router) ReadyCheck(w http.ResponseWriter, req *http.Request) {
 	// Check database connectivity
 	sqlDB, err := r.db.DB()
 	if err != nil {
-		r.writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+		r.writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status": "not_ready",
 			"error":  "failed to get database connection",
 		})
@@ -478,20 +483,20 @@ func (r *Router) ReadyCheck(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if err := sqlDB.PingContext(ctx); err != nil {
-		r.writeJSON(w, http.StatusServiceUnavailable, map[string]interface{}{
+		r.writeJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"status": "not_ready",
 			"error":  "database ping failed",
 		})
 		return
 	}
 
-	r.writeJSON(w, http.StatusOK, map[string]interface{}{
+	r.writeJSON(w, http.StatusOK, map[string]any{
 		"status": "ready",
 	})
 }
 
 // writeJSON writes JSON response
-func (r *Router) writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func (r *Router) writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {

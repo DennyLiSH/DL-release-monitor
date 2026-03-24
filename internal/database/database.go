@@ -15,9 +15,9 @@ import (
 
 // Connection pool settings for SQLite
 const (
-	maxOpenConns    = 1                // SQLite doesn't support multiple writers
-	maxIdleConns    = 1                // Single idle connection is sufficient
-	connMaxLifetime = time.Hour        // Recreate connections periodically
+	maxOpenConns    = 1         // SQLite doesn't support multiple writers
+	maxIdleConns    = 1         // Single idle connection is sufficient
+	connMaxLifetime = time.Hour // Recreate connections periodically
 )
 
 // Init initializes the database connection and runs migrations

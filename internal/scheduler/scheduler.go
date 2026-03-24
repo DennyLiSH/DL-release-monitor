@@ -418,7 +418,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 	// Use provided context for cancellation support
 	localPath, sha256sum, duration, err := s.storage.Download(ctx, asset.DownloadURL, repo.FullName, asset.Name)
 	if err != nil {
-		if err := s.db.Model(asset).Updates(map[string]interface{}{
+		if err := s.db.Model(asset).Updates(map[string]any{
 			"status":        models.AssetStatusFailed,
 			"error_message": err.Error(),
 		}).Error; err != nil {
@@ -443,7 +443,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 	}
 
 	// Update asset record
-	if err := s.db.Model(asset).Updates(map[string]interface{}{
+	if err := s.db.Model(asset).Updates(map[string]any{
 		"local_path": localPath,
 		"sha256":     sha256sum,
 		"status":     models.AssetStatusDone,

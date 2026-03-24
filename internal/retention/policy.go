@@ -89,7 +89,10 @@ func (p *Policy) determineKeepReleases(sortedReleases []models.Release, info ver
 	return keepReleases
 }
 
-// DetermineAssetsToDelete determines which assets should be deleted based on retention policy
+// DetermineAssetsToDelete determines which assets should be deleted based on retention policy.
+// It sorts releases by semantic version (newest first) and applies:
+// - MaxVersions: keep the latest N releases
+// - KeepLastMajor: if true, also keep the latest release of each major version
 func (p *Policy) DetermineAssetsToDelete(releases []models.Release, assets []models.Asset) []models.Asset {
 	if len(releases) == 0 || len(assets) == 0 {
 		return nil
@@ -110,7 +113,9 @@ func (p *Policy) DetermineAssetsToDelete(releases []models.Release, assets []mod
 	return toDelete
 }
 
-// FilterReleasesToKeep returns releases that should be kept
+// FilterReleasesToKeep returns releases that should be kept based on the retention policy.
+// Returns the original slice if releases count is within MaxVersions.
+// Otherwise applies MaxVersions and KeepLastMajor rules.
 func (p *Policy) FilterReleasesToKeep(releases []models.Release) []models.Release {
 	if len(releases) <= p.MaxVersions {
 		return releases
