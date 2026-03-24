@@ -1,7 +1,9 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -15,6 +17,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
+)
+
+const (
+	defaultReleaseLimit = 10
+	maxReleaseLimit     = 100
 )
 
 // ListRepos returns all repositories
@@ -66,7 +73,7 @@ func (r *Router) CreateRepo(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if err := r.db.Create(&repo).Error; err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		if isUniqueConstraintError(err) {
 			r.writeError(w, http.StatusConflict, "Repository already exists")
 			return
 		}
@@ -87,7 +94,7 @@ func (r *Router) GetRepo(w http.ResponseWriter, req *http.Request) {
 
 	var repo models.Repo
 	if err := r.db.First(&repo, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			r.writeError(w, http.StatusNotFound, "Repository not found")
 			return
 		}
@@ -96,7 +103,7 @@ func (r *Router) GetRepo(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// Load releases
-	if err := r.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Limit(10).Find(&repo.Releases).Error; err != nil {
+	if err := r.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Limit(defaultReleaseLimit).Find(&repo.Releases).Error; err != nil {
 		log.Printf("Failed to load releases for repo %d: %v", repo.ID, err)
 	}
 
@@ -113,7 +120,7 @@ func (r *Router) UpdateRepo(w http.ResponseWriter, req *http.Request) {
 
 	var repo models.Repo
 	if err := r.db.First(&repo, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			r.writeError(w, http.StatusNotFound, "Repository not found")
 			return
 		}
@@ -163,7 +170,7 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 
 	var repo models.Repo
 	if err := r.db.First(&repo, id).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			r.writeError(w, http.StatusNotFound, "Repository not found")
 			return
 		}
@@ -206,14 +213,24 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 	// 3. Database deleted successfully, now delete files asynchronously
 	// This ensures data consistency even if file deletion fails
 	go func() {
+		// Add timeout context to prevent goroutine from hanging indefinitely
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
 		storageBackend, err := storage.NewLocalStorage(r.cfg.Storage.Local.Path)
 		if err != nil {
 			log.Printf("Failed to initialize storage for cleanup: %v", err)
 			return
 		}
 		for _, path := range assetPaths {
-			if err := storageBackend.Delete(path); err != nil {
-				log.Printf("Warning: failed to delete file %s: %v", path, err)
+			select {
+			case <-ctx.Done():
+				log.Printf("File cleanup timed out, some files may remain")
+				return
+			default:
+				if err := storageBackend.Delete(path); err != nil {
+					log.Printf("Warning: failed to delete file %s: %v", path, err)
+				}
 			}
 		}
 	}()
@@ -231,7 +248,7 @@ func (r *Router) ListReleases(w http.ResponseWriter, req *http.Request) {
 	}
 
 	var releases []models.Release
-	if err := query.Limit(100).Find(&releases).Error; err != nil {
+	if err := query.Limit(maxReleaseLimit).Find(&releases).Error; err != nil {
 		r.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -242,7 +259,7 @@ func (r *Router) ListReleases(w http.ResponseWriter, req *http.Request) {
 // ListDownloads returns download history
 func (r *Router) ListDownloads(w http.ResponseWriter, req *http.Request) {
 	var logs []models.DownloadLog
-	if err := r.db.Order("created_at DESC").Limit(100).Find(&logs).Error; err != nil {
+	if err := r.db.Order("created_at DESC").Limit(maxReleaseLimit).Find(&logs).Error; err != nil {
 		r.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -437,4 +454,20 @@ func (r *Router) writeJSON(w http.ResponseWriter, status int, data interface{}) 
 // writeError writes error response
 func (r *Router) writeError(w http.ResponseWriter, status int, message string) {
 	r.writeJSON(w, status, map[string]string{"error": message})
+}
+
+// isUniqueConstraintError checks if the error is a unique constraint violation
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check GORM's duplicated key error
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	// Fallback to string matching for SQLite and other drivers
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "UNIQUE constraint failed") ||
+		strings.Contains(errMsg, "duplicate key value") ||
+		strings.Contains(errMsg, "Duplicate entry")
 }

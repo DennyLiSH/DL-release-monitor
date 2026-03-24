@@ -31,6 +31,7 @@ type Scheduler struct {
 	wg        sync.WaitGroup
 	mu        sync.Mutex
 	running   bool
+	checking  bool // prevents concurrent checkAllRepos
 	initOnce  sync.Once
 	initErr   error
 }
@@ -121,6 +122,11 @@ func (s *Scheduler) Stop() {
 
 	s.cancel()
 	s.wg.Wait()
+
+	// Reset initOnce to allow restart with fresh initialization
+	s.initOnce = sync.Once{}
+	s.initErr = nil
+
 	log.Println("Scheduler stopped")
 }
 
@@ -195,6 +201,21 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 
 // checkAllRepos checks all enabled repos for new releases
 func (s *Scheduler) checkAllRepos() {
+	s.mu.Lock()
+	if s.checking {
+		s.mu.Unlock()
+		log.Println("Check already in progress, skipping")
+		return
+	}
+	s.checking = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.checking = false
+		s.mu.Unlock()
+	}()
+
 	var repos []models.Repo
 	if err := s.db.Where("enabled = ?", true).Find(&repos).Error; err != nil {
 		log.Printf("Failed to fetch repos: %v", err)

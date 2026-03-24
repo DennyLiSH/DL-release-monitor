@@ -40,8 +40,8 @@ func sortReleasesByVersion(releases []models.Release) []models.Release {
 
 // versionInfo holds precomputed version information for retention decisions
 type versionInfo struct {
-	highestMinorForMajor  map[int]int
-	highestPatchForMinor  map[[2]int]int
+	highestMinorForMajor map[int]int
+	highestPatchForMinor map[[2]int]int
 }
 
 // calculateVersionInfo precomputes version information for retention decisions
