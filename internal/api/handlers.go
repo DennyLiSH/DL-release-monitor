@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	defaultReleaseLimit = 10
-	maxReleaseLimit     = 100
+	defaultReleaseLimit  = 10
+	maxReleaseLimit      = 100
+	defaultDeleteTimeout = 30 * time.Second
 )
 
 // ListRepos returns all repositories
@@ -213,8 +214,14 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 	// 3. Database deleted successfully, now delete files asynchronously
 	// This ensures data consistency even if file deletion fails
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Panic recovered in DeleteRepo cleanup: %v", r)
+			}
+		}()
+
 		// Add timeout context to prevent goroutine from hanging indefinitely
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), defaultDeleteTimeout)
 		defer cancel()
 
 		storageBackend, err := storage.NewLocalStorage(r.cfg.Storage.Local.Path)

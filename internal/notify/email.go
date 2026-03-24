@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const defaultWebhookTimeout = 10 * time.Second
+
 // EmailNotifier sends notifications via email
 type EmailNotifier struct {
 	host     string
@@ -87,10 +89,10 @@ func (n *EmailNotifier) sendWithTLS(addr string, msg []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)
 	}
+	defer conn.Close()
 
 	client, err := smtp.NewClient(conn, n.host)
 	if err != nil {
-		conn.Close()
 		return fmt.Errorf("failed to create SMTP client: %w", err)
 	}
 	defer client.Close()
@@ -157,7 +159,7 @@ func NewWebhookNotifier(url string) *WebhookNotifier {
 	return &WebhookNotifier{
 		url: url,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: defaultWebhookTimeout,
 		},
 	}
 }

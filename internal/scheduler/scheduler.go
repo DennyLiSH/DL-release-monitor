@@ -20,20 +20,20 @@ import (
 
 // Scheduler handles periodic release checking
 type Scheduler struct {
-	db        *gorm.DB
-	ghClient  *github.Client
-	cfg       *config.Config
-	storage   *storage.LocalStorage
-	notifyMgr *notify.Manager
-	parser    *release.Parser
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	mu        sync.Mutex
-	running   bool
-	checking  bool // prevents concurrent checkAllRepos
-	initOnce  sync.Once
-	initErr   error
+	db          *gorm.DB
+	ghClient    *github.Client
+	cfg         *config.Config
+	storage     *storage.LocalStorage
+	notifyMgr   *notify.Manager
+	parser      *release.Parser
+	ctx         context.Context
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	running     bool
+	checking    bool // prevents concurrent checkAllRepos
+	initialized bool
+	initErr     error
 }
 
 // New creates a new scheduler
@@ -50,36 +50,43 @@ func New(db *gorm.DB, ghClient *github.Client, cfg *config.Config) *Scheduler {
 
 // ensureInit ensures storage, notifyMgr, and parser are initialized
 func (s *Scheduler) ensureInit() error {
-	s.initOnce.Do(func() {
-		// Initialize storage
-		var err error
-		s.storage, err = storage.NewLocalStorage(s.cfg.Storage.Local.Path)
-		if err != nil {
-			s.initErr = fmt.Errorf("failed to initialize storage: %w", err)
-			return
-		}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-		// Initialize notification manager
-		s.notifyMgr = notify.NewManager()
-		if s.cfg.Notify.Email.Enabled {
-			s.notifyMgr.AddNotifier(notify.NewEmailNotifier(
-				s.cfg.Notify.Email.SMTPHost,
-				s.cfg.Notify.Email.SMTPPort,
-				s.cfg.Notify.Email.SMTPUser,
-				s.cfg.Notify.Email.SMTPPass,
-				s.cfg.Notify.Email.From,
-				s.cfg.Notify.Email.To,
-				s.cfg.Notify.Email.UseTLS,
-			))
-		}
-		if s.cfg.Notify.Webhook.Enabled {
-			s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(s.cfg.Notify.Webhook.URL))
-		}
+	if s.initialized {
+		return s.initErr
+	}
 
-		// Initialize parser
-		s.parser = release.NewParser()
-	})
-	return s.initErr
+	// Initialize storage
+	var err error
+	s.storage, err = storage.NewLocalStorage(s.cfg.Storage.Local.Path)
+	if err != nil {
+		s.initErr = fmt.Errorf("failed to initialize storage: %w", err)
+		return s.initErr
+	}
+
+	// Initialize notification manager
+	s.notifyMgr = notify.NewManager()
+	if s.cfg.Notify.Email.Enabled {
+		s.notifyMgr.AddNotifier(notify.NewEmailNotifier(
+			s.cfg.Notify.Email.SMTPHost,
+			s.cfg.Notify.Email.SMTPPort,
+			s.cfg.Notify.Email.SMTPUser,
+			s.cfg.Notify.Email.SMTPPass,
+			s.cfg.Notify.Email.From,
+			s.cfg.Notify.Email.To,
+			s.cfg.Notify.Email.UseTLS,
+		))
+	}
+	if s.cfg.Notify.Webhook.Enabled {
+		s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(s.cfg.Notify.Webhook.URL))
+	}
+
+	// Initialize parser
+	s.parser = release.NewParser()
+	s.initialized = true
+
+	return nil
 }
 
 // Start starts the scheduler
@@ -123,9 +130,11 @@ func (s *Scheduler) Stop() {
 	s.cancel()
 	s.wg.Wait()
 
-	// Reset initOnce to allow restart with fresh initialization
-	s.initOnce = sync.Once{}
+	// Reset initialization state to allow restart with fresh initialization
+	s.mu.Lock()
+	s.initialized = false
 	s.initErr = nil
+	s.mu.Unlock()
 
 	log.Println("Scheduler stopped")
 }
@@ -168,6 +177,11 @@ func (s *Scheduler) CheckNow() {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Panic recovered in CheckNow: %v", r)
+			}
+		}()
 		s.checkAllRepos()
 	}()
 }
@@ -194,6 +208,11 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("Panic recovered in CheckRepoNow: %v", r)
+			}
+		}()
 		s.checkRepo(&repo)
 	}()
 	return nil
@@ -243,7 +262,8 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 	default:
 	}
 
-	ctx := context.Background()
+	// Use scheduler's context for proper cancellation support
+	ctx := s.ctx
 
 	// Get releases from GitHub
 	releases, err := s.ghClient.GetReleaseList(ctx, repo.Owner, repo.Name)

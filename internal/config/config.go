@@ -23,8 +23,9 @@ type Config struct {
 
 // ServerConfig holds server configuration
 type ServerConfig struct {
-	Port    int    `yaml:"port"`
-	BaseURL string `yaml:"base_url"`
+	Port           int      `yaml:"port"`
+	BaseURL        string   `yaml:"base_url"`
+	AllowedOrigins []string `yaml:"allowed_origins"` // CORS allowed origins, empty or ["*"] allows all
 }
 
 // GitHubConfig holds GitHub API configuration
@@ -115,6 +116,9 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Server.BaseURL == "" {
 		cfg.Server.BaseURL = fmt.Sprintf("http://localhost:%d", cfg.Server.Port)
+	}
+	if len(cfg.Server.AllowedOrigins) == 0 {
+		cfg.Server.AllowedOrigins = []string{"*"}
 	}
 	if cfg.GitHub.PollInterval == 0 {
 		cfg.GitHub.PollInterval = 30

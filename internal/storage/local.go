@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -97,7 +98,9 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 	_, err = io.Copy(writer, resp.Body)
 	if err != nil {
 		out.Close()
-		os.Remove(tmpPath)
+		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.Printf("warning: failed to remove temp file %s: %v", tmpPath, removeErr)
+		}
 		if errors.Is(err, context.Canceled) {
 			return "", "", 0, fmt.Errorf("download canceled during write: %w", err)
 		}
@@ -106,13 +109,17 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 
 	// Close file before renaming
 	if err := out.Close(); err != nil {
-		os.Remove(tmpPath)
+		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.Printf("warning: failed to remove temp file %s: %v", tmpPath, removeErr)
+		}
 		return "", "", 0, fmt.Errorf("failed to close file: %w", err)
 	}
 
 	// Atomic rename from temp to final destination
 	if err := os.Rename(tmpPath, destPath); err != nil {
-		os.Remove(tmpPath)
+		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.Printf("warning: failed to remove temp file %s: %v", tmpPath, removeErr)
+		}
 		return "", "", 0, fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
@@ -159,7 +166,7 @@ func (s *LocalStorage) Exists(localPath string) bool {
 func (s *LocalStorage) Size(localPath string) (int64, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("failed to get file size: %w", err)
 	}
 	return info.Size(), nil
 }
@@ -176,7 +183,10 @@ func (s *LocalStorage) DiskUsage() (int64, error) {
 		}
 		return nil
 	})
-	return totalSize, err
+	if err != nil {
+		return 0, fmt.Errorf("failed to calculate disk usage: %w", err)
+	}
+	return totalSize, nil
 }
 
 // AvailableSpace returns available disk space

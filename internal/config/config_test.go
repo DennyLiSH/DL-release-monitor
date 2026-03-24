@@ -260,9 +260,9 @@ func TestGetCheckInterval(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		repoInterval    int
-		expected        int
+		name         string
+		repoInterval int
+		expected     int
 	}{
 		{"use repo interval", 60, 60},
 		{"use default when repo is 0", 0, 30},
@@ -421,11 +421,11 @@ func TestValidate(t *testing.T) {
 
 func TestParseRepoFullName(t *testing.T) {
 	tests := []struct {
-		name        string
-		input       string
-		wantOwner   string
-		wantRepo    string
-		wantErr     bool
+		name      string
+		input     string
+		wantOwner string
+		wantRepo  string
+		wantErr   bool
 	}{
 		{"valid", "owner/repo", "owner", "repo", false},
 		{"valid with dash", "my-org/my-repo", "my-org", "my-repo", false},
