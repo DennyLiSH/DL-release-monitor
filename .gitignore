@@ -1,4 +1,43 @@
-.claude/
+# Binaries
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+*.coverprofile
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
 .vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+/data/
+*.db
+*.db-journal
+
+# Claude
+.claude/
+
+# Config with secrets
+config.local.yaml
+.env
+
+# Analysis directories
 _*/
 CLAUDE.md

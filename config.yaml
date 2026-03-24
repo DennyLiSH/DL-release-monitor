@@ -1,0 +1,32 @@
+# GitHub Release Monitor Configuration
+
+server:
+  port: 8080
+  base_url: "http://localhost:8080"
+
+github:
+  token: "${GITHUB_TOKEN}"
+  poll_interval: 30  # minutes
+
+storage:
+  local:
+    enabled: true
+    path: "./data/downloads"
+
+retention:
+  max_versions: 5        # keep last N versions
+  keep_last_major: true  # keep last of each major version
+
+notify:
+  email:
+    enabled: false
+    smtp_host: "smtp.example.com"
+    smtp_port: 587
+    smtp_user: "${SMTP_USER}"
+    smtp_pass: "${SMTP_PASS}"
+    from: "noreply@example.com"
+    to: "your@email.com"
+
+  webhook:
+    enabled: false
+    url: "https://your-webhook.com/notify"
