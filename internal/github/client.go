@@ -110,31 +110,7 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 		}
 
 		for _, r := range ghReleases {
-			var publishedAt time.Time
-			if r.PublishedAt != nil {
-				publishedAt = r.PublishedAt.Time
-			}
-			release := ReleaseInfo{
-				ID:          r.GetID(),
-				TagName:     r.GetTagName(),
-				Name:        r.GetName(),
-				Body:        r.GetBody(),
-				HTMLURL:     r.GetHTMLURL(),
-				PublishedAt: publishedAt,
-				Prerelease:  r.GetPrerelease(),
-				Draft:       r.GetDraft(),
-			}
-
-			for _, a := range r.Assets {
-				release.Assets = append(release.Assets, AssetInfo{
-					ID:          a.GetID(),
-					Name:        a.GetName(),
-					Size:        int64(a.GetSize()),
-					DownloadURL: a.GetBrowserDownloadURL(),
-				})
-			}
-
-			releases = append(releases, release)
+			releases = append(releases, convertRelease(r))
 		}
 
 		if resp.NextPage == 0 {
@@ -160,11 +136,18 @@ func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*Rel
 		return nil, fmt.Errorf("failed to fetch latest release for %s/%s: %w", owner, repo, err)
 	}
 
+	release := convertRelease(r)
+	return &release, nil
+}
+
+// convertRelease converts a GitHub release to our ReleaseInfo type
+func convertRelease(r *gh.RepositoryRelease) ReleaseInfo {
 	var publishedAt time.Time
 	if r.PublishedAt != nil {
 		publishedAt = r.PublishedAt.Time
 	}
-	release := &ReleaseInfo{
+
+	return ReleaseInfo{
 		ID:          r.GetID(),
 		TagName:     r.GetTagName(),
 		Name:        r.GetName(),
@@ -173,18 +156,26 @@ func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*Rel
 		PublishedAt: publishedAt,
 		Prerelease:  r.GetPrerelease(),
 		Draft:       r.GetDraft(),
+		Assets:      buildAssets(r.Assets),
+	}
+}
+
+// buildAssets converts GitHub assets to our AssetInfo slice
+func buildAssets(assets []*gh.ReleaseAsset) []AssetInfo {
+	if len(assets) == 0 {
+		return nil
 	}
 
-	for _, a := range r.Assets {
-		release.Assets = append(release.Assets, AssetInfo{
+	result := make([]AssetInfo, 0, len(assets))
+	for _, a := range assets {
+		result = append(result, AssetInfo{
 			ID:          a.GetID(),
 			Name:        a.GetName(),
 			Size:        int64(a.GetSize()),
 			DownloadURL: a.GetBrowserDownloadURL(),
 		})
 	}
-
-	return release, nil
+	return result
 }
 
 // ValidateRepo checks if a repository exists and is accessible

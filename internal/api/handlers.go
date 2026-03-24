@@ -22,17 +22,57 @@ import (
 const (
 	defaultReleaseLimit  = 10
 	maxReleaseLimit      = 100
+	defaultRepoLimit     = 50
+	maxRepoLimit         = 100
 	defaultDeleteTimeout = 30 * time.Second
 )
 
-// ListRepos returns all repositories
+// ListRepos returns all repositories with pagination
 func (r *Router) ListRepos(w http.ResponseWriter, req *http.Request) {
+	// Parse pagination parameters
+	page, limit := parsePagination(req, defaultRepoLimit, maxRepoLimit)
+	offset := (page - 1) * limit
+
 	var repos []models.Repo
-	if err := r.db.Order("created_at DESC").Find(&repos).Error; err != nil {
+	if err := r.db.Order("created_at DESC").Offset(offset).Limit(limit).Find(&repos).Error; err != nil {
 		r.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	r.writeJSON(w, http.StatusOK, repos)
+
+	// Get total count for pagination
+	var total int64
+	if err := r.db.Model(&models.Repo{}).Count(&total).Error; err != nil {
+		r.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	r.writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data":   repos,
+		"page":   page,
+		"limit":  limit,
+		"total":  total,
+		"pages":  (total + int64(limit) - 1) / int64(limit),
+	})
+}
+
+// parsePagination extracts page and limit from query parameters
+func parsePagination(req *http.Request, defaultLimit, maxLimit int) (page, limit int) {
+	page = 1
+	limit = defaultLimit
+
+	if p := req.URL.Query().Get("page"); p != "" {
+		if v, err := strconv.Atoi(p); err == nil && v > 0 {
+			page = v
+		}
+	}
+
+	if l := req.URL.Query().Get("limit"); l != "" {
+		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= maxLimit {
+			limit = v
+		}
+	}
+
+	return page, limit
 }
 
 // CreateRepo creates a new repository
@@ -105,7 +145,8 @@ func (r *Router) GetRepo(w http.ResponseWriter, req *http.Request) {
 
 	// Load releases
 	if err := r.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Limit(defaultReleaseLimit).Find(&repo.Releases).Error; err != nil {
-		log.Printf("Failed to load releases for repo %d: %v", repo.ID, err)
+		r.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load releases: %v", err))
+		return
 	}
 
 	r.writeJSON(w, http.StatusOK, repo)

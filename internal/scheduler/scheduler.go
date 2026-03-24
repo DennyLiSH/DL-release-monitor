@@ -23,6 +23,7 @@ type Scheduler struct {
 	db          *gorm.DB
 	ghClient    *github.Client
 	cfg         *config.Config
+	cfgMu       sync.RWMutex // protects cfg access
 	storage     *storage.LocalStorage
 	notifyMgr   *notify.Manager
 	parser      *release.Parser
@@ -57,9 +58,11 @@ func (s *Scheduler) ensureInit() error {
 		return s.initErr
 	}
 
+	cfg := s.getConfig()
+
 	// Initialize storage
 	var err error
-	s.storage, err = storage.NewLocalStorage(s.cfg.Storage.Local.Path)
+	s.storage, err = storage.NewLocalStorage(cfg.Storage.Local.Path)
 	if err != nil {
 		s.initErr = fmt.Errorf("failed to initialize storage: %w", err)
 		return s.initErr
@@ -67,19 +70,19 @@ func (s *Scheduler) ensureInit() error {
 
 	// Initialize notification manager
 	s.notifyMgr = notify.NewManager()
-	if s.cfg.Notify.Email.Enabled {
+	if cfg.Notify.Email.Enabled {
 		s.notifyMgr.AddNotifier(notify.NewEmailNotifier(
-			s.cfg.Notify.Email.SMTPHost,
-			s.cfg.Notify.Email.SMTPPort,
-			s.cfg.Notify.Email.SMTPUser,
-			s.cfg.Notify.Email.SMTPPass,
-			s.cfg.Notify.Email.From,
-			s.cfg.Notify.Email.To,
-			s.cfg.Notify.Email.UseTLS,
+			cfg.Notify.Email.SMTPHost,
+			cfg.Notify.Email.SMTPPort,
+			cfg.Notify.Email.SMTPUser,
+			cfg.Notify.Email.SMTPPass,
+			cfg.Notify.Email.From,
+			cfg.Notify.Email.To,
+			cfg.Notify.Email.UseTLS,
 		))
 	}
-	if s.cfg.Notify.Webhook.Enabled {
-		s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(s.cfg.Notify.Webhook.URL))
+	if cfg.Notify.Webhook.Enabled {
+		s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(cfg.Notify.Webhook.URL))
 	}
 
 	// Initialize parser
@@ -114,7 +117,8 @@ func (s *Scheduler) Start() {
 	s.wg.Add(1)
 	go s.run()
 
-	log.Printf("Scheduler started with poll interval: %d minutes", s.cfg.GitHub.PollInterval)
+	cfg := s.getConfig()
+	log.Printf("Scheduler started with poll interval: %d minutes", cfg.GitHub.PollInterval)
 }
 
 // Stop stops the scheduler
@@ -146,7 +150,8 @@ func (s *Scheduler) run() {
 	// Initial check on start
 	s.checkAllRepos()
 
-	ticker := time.NewTicker(time.Duration(s.cfg.GitHub.PollInterval) * time.Minute)
+	cfg := s.getConfig()
+	ticker := time.NewTicker(time.Duration(cfg.GitHub.PollInterval) * time.Minute)
 	defer ticker.Stop()
 
 	for {
@@ -279,7 +284,7 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 	}
 
 	// Update last checked time
-	if err := s.db.Model(repo).Update("last_checked_at", time.Now()).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(repo).Update("last_checked_at", time.Now()).Error; err != nil {
 		log.Printf("[%s] Failed to update last_checked_at: %v", repo.FullName, err)
 	}
 
@@ -287,92 +292,120 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 
 	// Process each release
 	for _, ghRelease := range releases {
-		// Skip drafts
-		if ghRelease.Draft {
-			continue
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 
-		// Check if release already exists
-		var existingRelease models.Release
-		result := s.db.Where("repo_id = ? AND github_id = ?", repo.ID, ghRelease.ID).First(&existingRelease)
-		if result.Error == nil {
-			// Release already processed
-			continue
-		}
-
-		// Parse version
-		version, major, minor, patch := s.parser.ParseVersion(ghRelease.TagName)
-
-		// Create release record
-		newRelease := models.Release{
-			RepoID:      repo.ID,
-			GitHubID:    ghRelease.ID,
-			TagName:     ghRelease.TagName,
-			Version:     version,
-			Major:       major,
-			Minor:       minor,
-			Patch:       patch,
-			Prerelease:  ghRelease.Prerelease,
-			Draft:       ghRelease.Draft,
-			PublishedAt: ghRelease.PublishedAt,
-			HTMLURL:     ghRelease.HTMLURL,
-			Body:        ghRelease.Body,
-		}
-
-		if err := s.db.Create(&newRelease).Error; err != nil {
-			log.Printf("[%s] Failed to create release record: %v", repo.FullName, err)
-			continue
-		}
-
-		log.Printf("[%s] New release: %s", repo.FullName, ghRelease.TagName)
-
-		// Process assets
-		var downloadedAssets []string
-		for _, ghAsset := range ghRelease.Assets {
-			assetType := s.parser.GetAssetType(ghAsset.Name)
-			if !s.parser.ShouldDownloadAsset(assetType) {
-				continue
-			}
-
-			// Create asset record
-			asset := models.Asset{
-				ReleaseID:   newRelease.ID,
-				GitHubID:    ghAsset.ID,
-				Name:        ghAsset.Name,
-				Type:        assetType,
-				Size:        ghAsset.Size,
-				DownloadURL: ghAsset.DownloadURL,
-				Status:      models.AssetStatusPending,
-			}
-
-			if err := s.db.Create(&asset).Error; err != nil {
-				log.Printf("[%s] Failed to create asset record: %v", repo.FullName, err)
-				continue
-			}
-
-			// Download asset
-			s.downloadAsset(ctx, repo, &newRelease, &asset)
-			if asset.Status == models.AssetStatusDone {
-				downloadedAssets = append(downloadedAssets, asset.Name)
-			}
-		}
-
-		// Send notification if assets were downloaded
-		if len(downloadedAssets) > 0 && s.notifyMgr != nil {
-			errs := s.notifyMgr.Send(&notify.Notification{
-				RepoName:   repo.FullName,
-				Version:    newRelease.Version,
-				AssetNames: downloadedAssets,
-				HTMLURL:    newRelease.HTMLURL,
-			})
-			if len(errs) > 0 {
-				log.Printf("[%s] Some notifications failed: %v", repo.FullName, errs)
-			}
+		if s.processRelease(ctx, repo, ghRelease) {
+			// New release was processed successfully
 		}
 	}
 
 	// Apply retention policy
 	s.applyRetentionPolicy(repo)
+}
+
+// processRelease processes a single GitHub release, returns true if it was newly processed
+func (s *Scheduler) processRelease(ctx context.Context, repo *models.Repo, ghRelease github.ReleaseInfo) bool {
+	// Skip drafts
+	if ghRelease.Draft {
+		return false
+	}
+
+	// Check if release already exists
+	var existingRelease models.Release
+	result := s.db.WithContext(ctx).Where("repo_id = ? AND github_id = ?", repo.ID, ghRelease.ID).First(&existingRelease)
+	if result.Error == nil {
+		// Release already processed
+		return false
+	}
+
+	// Parse version
+	version, major, minor, patch := s.parser.ParseVersion(ghRelease.TagName)
+
+	// Create release record
+	newRelease := models.Release{
+		RepoID:      repo.ID,
+		GitHubID:    ghRelease.ID,
+		TagName:     ghRelease.TagName,
+		Version:     version,
+		Major:       major,
+		Minor:       minor,
+		Patch:       patch,
+		Prerelease:  ghRelease.Prerelease,
+		Draft:       ghRelease.Draft,
+		PublishedAt: ghRelease.PublishedAt,
+		HTMLURL:     ghRelease.HTMLURL,
+		Body:        ghRelease.Body,
+	}
+
+	if err := s.db.WithContext(ctx).Create(&newRelease).Error; err != nil {
+		log.Printf("[%s] Failed to create release record: %v", repo.FullName, err)
+		return false
+	}
+
+	log.Printf("[%s] New release: %s", repo.FullName, ghRelease.TagName)
+
+	// Process assets
+	downloadedAssets := s.processReleaseAssets(ctx, repo, &newRelease, ghRelease.Assets)
+
+	// Send notification if assets were downloaded
+	if len(downloadedAssets) > 0 && s.notifyMgr != nil {
+		s.sendNotification(repo, &newRelease, downloadedAssets)
+	}
+
+	return true
+}
+
+// processReleaseAssets processes all assets for a release, returns list of downloaded asset names
+func (s *Scheduler) processReleaseAssets(ctx context.Context, repo *models.Repo, release *models.Release, assets []github.AssetInfo) []string {
+	var downloadedAssets []string
+
+	for _, ghAsset := range assets {
+		assetType := s.parser.GetAssetType(ghAsset.Name)
+		if !s.parser.ShouldDownloadAsset(assetType) {
+			continue
+		}
+
+		// Create asset record
+		asset := models.Asset{
+			ReleaseID:   release.ID,
+			GitHubID:    ghAsset.ID,
+			Name:        ghAsset.Name,
+			Type:        assetType,
+			Size:        ghAsset.Size,
+			DownloadURL: ghAsset.DownloadURL,
+			Status:      models.AssetStatusPending,
+		}
+
+		if err := s.db.WithContext(ctx).Create(&asset).Error; err != nil {
+			log.Printf("[%s] Failed to create asset record: %v", repo.FullName, err)
+			continue
+		}
+
+		// Download asset
+		s.downloadAsset(ctx, repo, release, &asset)
+		if asset.Status == models.AssetStatusDone {
+			downloadedAssets = append(downloadedAssets, asset.Name)
+		}
+	}
+
+	return downloadedAssets
+}
+
+// sendNotification sends a notification for a new release
+func (s *Scheduler) sendNotification(repo *models.Repo, release *models.Release, assetNames []string) {
+	errs := s.notifyMgr.Send(&notify.Notification{
+		RepoName:   repo.FullName,
+		Version:    release.Version,
+		AssetNames: assetNames,
+		HTMLURL:    release.HTMLURL,
+	})
+	if len(errs) > 0 {
+		log.Printf("[%s] Some notifications failed: %v", repo.FullName, errs)
+	}
 }
 
 // downloadAsset downloads a single asset
@@ -434,11 +467,19 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 	log.Printf("[%s] Downloaded %s (%d ms)", repo.FullName, asset.Name, duration)
 }
 
+// getConfig returns a copy of the current config under read lock
+func (s *Scheduler) getConfig() config.Config {
+	s.cfgMu.RLock()
+	defer s.cfgMu.RUnlock()
+	return *s.cfg
+}
+
 // applyRetentionPolicy applies retention policy for a repo
 func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 	// Get effective retention settings
-	maxVersions := s.cfg.GetRetention(repo.Retention)
-	keepLastMajor := s.cfg.Retention.KeepLastMajor
+	cfg := s.getConfig()
+	maxVersions := cfg.GetRetention(repo.Retention)
+	keepLastMajor := cfg.Retention.KeepLastMajor
 
 	// Get all releases for this repo
 	var releases []models.Release
