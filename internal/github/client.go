@@ -222,6 +222,10 @@ func isRetryableError(err error) bool {
 
 	// Check for GitHub API rate limit response
 	if ghErr, ok := err.(*gh.ErrorResponse); ok {
+		// Safely check Response to avoid nil pointer dereference
+		if ghErr.Response == nil {
+			return false
+		}
 		// Rate limit (403 with rate limit message)
 		if ghErr.Response.StatusCode == http.StatusForbidden {
 			return strings.Contains(strings.ToLower(ghErr.Message), "rate limit")

@@ -128,8 +128,20 @@ func (p *Parser) ShouldDownloadAsset(assetType string) bool {
 	}
 }
 
-// CompareVersions compares two version strings
-// Returns: -1 if v1 < v2, 0 if v1 == v2, 1 if v1 > v2
+// CompareVersions compares two version strings using semantic version ordering.
+// It extracts numeric parts from each version string and compares them numerically.
+//
+// Returns:
+//   - -1 if v1 < v2 (v1 is older/smaller)
+//   - 0 if v1 == v2 (versions are equivalent)
+//   - 1 if v1 > v2 (v1 is newer/larger)
+//
+// Examples:
+//
+//	CompareVersions("1.0.0", "2.0.0")  // returns -1
+//	CompareVersions("2.0.0", "1.0.0")  // returns 1
+//	CompareVersions("1.0.0", "1.0.0")  // returns 0
+//	CompareVersions("v1.2.3", "v1.2.4") // returns -1 (v prefix is handled)
 func CompareVersions(v1, v2 string) int {
 	// Use pre-compiled regex for version parsing
 	v1Parts := versionPartRegex.FindAllString(v1, -1)

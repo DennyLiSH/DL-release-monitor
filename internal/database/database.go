@@ -13,6 +13,13 @@ import (
 	"gorm.io/gorm/logger"
 )
 
+// Connection pool settings for SQLite
+const (
+	maxOpenConns    = 1                // SQLite doesn't support multiple writers
+	maxIdleConns    = 1                // Single idle connection is sufficient
+	connMaxLifetime = time.Hour        // Recreate connections periodically
+)
+
 // Init initializes the database connection and runs migrations
 // The database file will be created in the same directory as storagePath
 func Init(storagePath string) (*gorm.DB, error) {
@@ -40,9 +47,9 @@ func Init(storagePath string) (*gorm.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get underlying DB: %w", err)
 	}
-	sqlDB.SetMaxOpenConns(1) // SQLite doesn't support multiple writers
-	sqlDB.SetMaxIdleConns(1)
-	sqlDB.SetConnMaxLifetime(time.Hour)
+	sqlDB.SetMaxOpenConns(maxOpenConns)
+	sqlDB.SetMaxIdleConns(maxIdleConns)
+	sqlDB.SetConnMaxLifetime(connMaxLifetime)
 
 	// Verify connection
 	if err := sqlDB.Ping(); err != nil {

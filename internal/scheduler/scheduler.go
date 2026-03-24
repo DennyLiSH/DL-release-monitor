@@ -151,7 +151,7 @@ func (s *Scheduler) run() {
 
 	for {
 		select {
-		case <-s.ctx.Done():
+		case <-s.getContext().Done():
 			return
 		case <-ticker.C:
 			s.checkAllRepos()
@@ -245,7 +245,7 @@ func (s *Scheduler) checkAllRepos() {
 
 	for i := range repos {
 		select {
-		case <-s.ctx.Done():
+		case <-s.getContext().Done():
 			return
 		default:
 			s.checkRepo(&repos[i])
@@ -253,17 +253,23 @@ func (s *Scheduler) checkAllRepos() {
 	}
 }
 
+// getContext returns the scheduler's context under lock protection
+func (s *Scheduler) getContext() context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ctx
+}
+
 // checkRepo checks a single repo for new releases
 func (s *Scheduler) checkRepo(repo *models.Repo) {
+	ctx := s.getContext()
+
 	// Check if scheduler is stopping
 	select {
-	case <-s.ctx.Done():
+	case <-ctx.Done():
 		return
 	default:
 	}
-
-	// Use scheduler's context for proper cancellation support
-	ctx := s.ctx
 
 	// Get releases from GitHub
 	releases, err := s.ghClient.GetReleaseList(ctx, repo.Owner, repo.Name)
@@ -345,7 +351,7 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 			}
 
 			// Download asset
-			s.downloadAsset(repo, &newRelease, &asset)
+			s.downloadAsset(ctx, repo, &newRelease, &asset)
 			if asset.Status == models.AssetStatusDone {
 				downloadedAssets = append(downloadedAssets, asset.Name)
 			}
@@ -370,14 +376,14 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 }
 
 // downloadAsset downloads a single asset
-func (s *Scheduler) downloadAsset(repo *models.Repo, rel *models.Release, asset *models.Asset) {
+func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *models.Release, asset *models.Asset) {
 	// Mark as downloading
 	if err := s.db.Model(asset).Update("status", models.AssetStatusDownloading).Error; err != nil {
 		log.Printf("[%s] Failed to update asset status to downloading: %v", repo.FullName, err)
 	}
 
-	// Use scheduler's context for cancellation support
-	localPath, sha256sum, duration, err := s.storage.Download(s.ctx, asset.DownloadURL, repo.FullName, asset.Name)
+	// Use provided context for cancellation support
+	localPath, sha256sum, duration, err := s.storage.Download(ctx, asset.DownloadURL, repo.FullName, asset.Name)
 	if err != nil {
 		if err := s.db.Model(asset).Updates(map[string]interface{}{
 			"status":        models.AssetStatusFailed,

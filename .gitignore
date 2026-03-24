@@ -31,6 +31,10 @@ Thumbs.db
 *.db
 *.db-journal
 
+# Logs
+*.log
+logs/
+
 # Claude
 .claude/
 

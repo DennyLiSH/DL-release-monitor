@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/smtp"
 	"time"
@@ -89,13 +90,21 @@ func (n *EmailNotifier) sendWithTLS(addr string, msg []byte) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to SMTP server: %w", err)
 	}
-	defer conn.Close()
+	defer func() {
+		if err := conn.Close(); err != nil {
+			log.Printf("Failed to close SMTP connection: %v", err)
+		}
+	}()
 
 	client, err := smtp.NewClient(conn, n.host)
 	if err != nil {
 		return fmt.Errorf("failed to create SMTP client: %w", err)
 	}
-	defer client.Close()
+	defer func() {
+		if err := client.Close(); err != nil {
+			log.Printf("Failed to close SMTP client: %v", err)
+		}
+	}()
 
 	// Authenticate if credentials provided
 	if n.username != "" && n.password != "" {
@@ -190,7 +199,9 @@ func (n *WebhookNotifier) Send(notification *Notification) error {
 	defer resp.Body.Close()
 
 	// Read and discard response body to ensure connection can be reused
-	io.Copy(io.Discard, resp.Body)
+	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
+		log.Printf("Failed to drain webhook response body: %v", err)
+	}
 
 	if resp.StatusCode >= 400 {
 		return fmt.Errorf("webhook returned status %d", resp.StatusCode)

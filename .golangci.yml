@@ -19,11 +19,20 @@ linters:
     - contextcheck  # 检查 context 传递
     - sqlclosecheck # 检查 SQL rows 是否关闭
     - noctx         # 检查 HTTP 请求是否有 context
+    - gosec         # 安全扫描
+    - gocyclo       # 圈复杂度检查
+    - dupl          # 重复代码检测
 
 linters-settings:
   errcheck:
     check-type-assertions: true
     check-blank: true
+
+  gocyclo:
+    min-complexity: 15  # 合理的圈复杂度阈值
+
+  dupl:
+    threshold: 100  # 重复代码最小token数
 
   revive:
     rules:
