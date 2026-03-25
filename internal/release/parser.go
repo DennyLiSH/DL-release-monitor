@@ -26,7 +26,18 @@ func NewParser() *Parser {
 	return &Parser{}
 }
 
-// ParseVersion extracts version components from a tag name
+// ParseVersion extracts version components from a tag name.
+// It parses semantic versioning tags like "v1.2.3" into their components.
+//
+// Parameters:
+//   - tagName: The git tag name (e.g., "v1.2.3", "1.0.0", "v2.0.0-beta")
+//
+// Returns:
+//   - version: The cleaned version string (without 'v' prefix)
+//   - major, minor, patch: Version components (0 if parsing fails or not present)
+//
+// If the version string doesn't match semantic versioning format, returns (version, 0, 0, 0).
+// Pre-release suffixes (e.g., "-beta", "+build") are stripped before comparison.
 func (p *Parser) ParseVersion(tagName string) (version string, major, minor, patch int) {
 	// Remove 'v' prefix
 	version = strings.TrimPrefix(tagName, "v")

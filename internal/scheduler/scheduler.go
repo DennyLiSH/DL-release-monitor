@@ -353,7 +353,7 @@ func (s *Scheduler) processRelease(ctx context.Context, repo *models.Repo, ghRel
 
 	// Send notification if assets were downloaded
 	if len(downloadedAssets) > 0 && s.notifyMgr != nil {
-		s.sendNotification(repo, &newRelease, downloadedAssets)
+		s.sendNotification(ctx, repo, &newRelease, downloadedAssets)
 	}
 
 	return true
@@ -396,8 +396,8 @@ func (s *Scheduler) processReleaseAssets(ctx context.Context, repo *models.Repo,
 }
 
 // sendNotification sends a notification for a new release
-func (s *Scheduler) sendNotification(repo *models.Repo, release *models.Release, assetNames []string) {
-	errs := s.notifyMgr.Send(&notify.Notification{
+func (s *Scheduler) sendNotification(ctx context.Context, repo *models.Repo, release *models.Release, assetNames []string) {
+	errs := s.notifyMgr.Send(ctx, &notify.Notification{
 		RepoName:   repo.FullName,
 		Version:    release.Version,
 		AssetNames: assetNames,

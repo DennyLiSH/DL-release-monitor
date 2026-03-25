@@ -18,7 +18,8 @@ import (
 // Default download timeout
 const DefaultDownloadTimeout = 10 * time.Minute
 
-// LocalStorage handles local file storage
+// LocalStorage implements the Storage interface for local filesystem operations.
+// It provides thread-safe file download, deletion, and management capabilities.
 type LocalStorage struct {
 	basePath       string
 	downloadClient *http.Client

@@ -24,12 +24,12 @@ const (
 	backoffFactor  = 2.0
 )
 
-// Client wraps the GitHub API client
+// Client wraps the GitHub API client with retry logic and rate limiting.
 type Client struct {
 	client *gh.Client
 }
 
-// ReleaseInfo represents a simplified release information
+// ReleaseInfo represents a simplified release information from GitHub.
 type ReleaseInfo struct {
 	ID          int64
 	TagName     string
@@ -42,7 +42,7 @@ type ReleaseInfo struct {
 	Assets      []AssetInfo
 }
 
-// AssetInfo represents a simplified asset information
+// AssetInfo represents a simplified asset information from a GitHub release.
 type AssetInfo struct {
 	ID          int64
 	Name        string
@@ -50,13 +50,22 @@ type AssetInfo struct {
 	DownloadURL string
 }
 
-// NewClient creates a new GitHub client
+// NewClient creates a new GitHub API client with the provided authentication token.
+// The token should be a GitHub personal access token with appropriate repository permissions.
 func NewClient(token string) *Client {
 	client := gh.NewClient(nil).WithAuthToken(token)
 	return &Client{client: client}
 }
 
-// GetReleaseList fetches releases for a repository
+// GetReleaseList fetches all releases for a repository with pagination.
+// It implements exponential backoff retry logic for rate limits and transient errors.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - owner: Repository owner (e.g., "golang")
+//   - repo: Repository name (e.g., "go")
+//
+// Returns a slice of ReleaseInfo or an error if the request fails after retries.
 func (c *Client) GetReleaseList(ctx context.Context, owner, repo string) ([]ReleaseInfo, error) {
 	var releases []ReleaseInfo
 	var err error
@@ -122,7 +131,14 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 	return releases, nil
 }
 
-// GetLatestRelease fetches the latest release for a repository
+// GetLatestRelease fetches the latest non-draft, non-prerelease release for a repository.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - owner: Repository owner (e.g., "golang")
+//   - repo: Repository name (e.g., "go")
+//
+// Returns the latest release info or an error. Returns error if no releases exist.
 func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*ReleaseInfo, error) {
 	// Add delay between requests to avoid secondary rate limits (context-aware)
 	select {
@@ -178,7 +194,13 @@ func buildAssets(assets []*gh.ReleaseAsset) []AssetInfo {
 	return result
 }
 
-// ValidateRepo checks if a repository exists and is accessible
+// ValidateRepo checks if a repository exists and is accessible with the current credentials.
+// Returns nil if accessible, or an error describing why access failed.
+//
+// Parameters:
+//   - ctx: Context for cancellation and timeout
+//   - owner: Repository owner (e.g., "golang")
+//   - repo: Repository name (e.g., "go")
 func (c *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
 	// Add delay between requests to avoid secondary rate limits (context-aware)
 	select {

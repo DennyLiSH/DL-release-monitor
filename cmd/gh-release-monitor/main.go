@@ -66,26 +66,34 @@ func main() {
 	}
 
 	// Start server in goroutine
+	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("Server starting on port %d", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			select {
+			case serverErr <- err:
+			default:
+			}
 		}
 	}()
 
-	// Wait for interrupt signal
+	// Wait for interrupt signal or server error
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
 
-	log.Println("Shutting down server...")
+	select {
+	case <-quit:
+		log.Println("Shutting down server...")
+	case err := <-serverErr:
+		log.Printf("Server failed: %v", err)
+	}
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		log.Printf("Server forced to shutdown: %v", err)
 	}
 
 	log.Println("Server exited")

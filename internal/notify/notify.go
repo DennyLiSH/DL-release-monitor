@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"fmt"
 	"log"
 )
@@ -15,7 +16,8 @@ type Notification struct {
 
 // Notifier is the interface for notification backends
 type Notifier interface {
-	Send(notification *Notification) error
+	// Send sends a notification. Context is used for cancellation and timeout.
+	Send(ctx context.Context, notification *Notification) error
 	Name() string
 }
 
@@ -36,14 +38,20 @@ func (m *Manager) AddNotifier(notifier Notifier) {
 	m.notifiers = append(m.notifiers, notifier)
 }
 
-// Send sends notification through all configured backends
-// Notifications are sent sequentially to avoid overwhelming external services
-// Returns a slice of errors from failed notifications (nil if all succeeded)
-func (m *Manager) Send(notification *Notification) []error {
+// Send sends notification through all configured backends.
+// Notifications are sent sequentially to avoid overwhelming external services.
+// Context is used for cancellation and timeout.
+// Returns a slice of errors from failed notifications (nil if all succeeded).
+func (m *Manager) Send(ctx context.Context, notification *Notification) []error {
 	var errs []error
 
 	for _, n := range m.notifiers {
-		if err := n.Send(notification); err != nil {
+		// Check context before each notification
+		if ctx.Err() != nil {
+			errs = append(errs, fmt.Errorf("notification canceled"))
+			break
+		}
+		if err := n.Send(ctx, notification); err != nil {
 			log.Printf("[%s] Failed to send notification: %v", n.Name(), err)
 			errs = append(errs, fmt.Errorf("[%s]: %w", n.Name(), err))
 		} else {

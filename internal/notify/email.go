@@ -2,6 +2,7 @@ package notify
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -43,8 +44,13 @@ func (n *EmailNotifier) Name() string {
 	return "email"
 }
 
-// Send sends an email notification
-func (n *EmailNotifier) Send(notification *Notification) error {
+// Send sends an email notification. Context is currently unused but provided for interface compatibility.
+func (n *EmailNotifier) Send(ctx context.Context, notification *Notification) error {
+	// Check context before starting
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	subject := fmt.Sprintf("[GitHub Release] %s %s released", notification.RepoName, notification.Version)
 	body := n.buildBody(notification)
 
@@ -178,8 +184,8 @@ func (n *WebhookNotifier) Name() string {
 	return "webhook"
 }
 
-// Send sends a webhook notification
-func (n *WebhookNotifier) Send(notification *Notification) error {
+// Send sends a webhook notification with context support.
+func (n *WebhookNotifier) Send(ctx context.Context, notification *Notification) error {
 	payload := map[string]any{
 		"repo_name": notification.RepoName,
 		"version":   notification.Version,
@@ -192,7 +198,14 @@ func (n *WebhookNotifier) Send(notification *Notification) error {
 		return fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
 
-	resp, err := n.client.Post(n.url, "application/json", bytes.NewBuffer(jsonData))
+	// Create request with context
+	req, err := http.NewRequestWithContext(ctx, "POST", n.url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return fmt.Errorf("failed to create webhook request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := n.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send webhook: %w", err)
 	}
