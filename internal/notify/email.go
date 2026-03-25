@@ -19,6 +19,9 @@ import (
 
 const defaultWebhookTimeout = 10 * time.Second
 
+// DefaultWebhookTimeout is the default timeout for webhook notifications
+var DefaultWebhookTimeout = defaultWebhookTimeout
+
 // ErrInvalidWebhookURL is returned when webhook URL fails security validation
 var ErrInvalidWebhookURL = errors.New("webhook URL is not allowed: possible SSRF risk")
 
@@ -237,16 +240,22 @@ type WebhookNotifier struct {
 	client *http.Client
 }
 
-// NewWebhookNotifier creates a new webhook notifier.
+// NewWebhookNotifier creates a new webhook notifier with default timeout.
 // Returns an error if the URL fails SSRF security validation.
 func NewWebhookNotifier(url string) (*WebhookNotifier, error) {
+	return NewWebhookNotifierWithTimeout(url, DefaultWebhookTimeout)
+}
+
+// NewWebhookNotifierWithTimeout creates a new webhook notifier with custom timeout.
+// Returns an error if the URL fails SSRF security validation.
+func NewWebhookNotifierWithTimeout(url string, timeout time.Duration) (*WebhookNotifier, error) {
 	if err := validateWebhookURL(url); err != nil {
 		return nil, fmt.Errorf("webhook URL validation failed: %w", err)
 	}
 	return &WebhookNotifier{
 		url: url,
 		client: &http.Client{
-			Timeout: defaultWebhookTimeout,
+			Timeout: timeout,
 		},
 	}, nil
 }

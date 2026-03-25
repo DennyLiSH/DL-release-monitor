@@ -15,9 +15,6 @@ import (
 	"time"
 )
 
-// Default download timeout
-const DefaultDownloadTimeout = 10 * time.Minute
-
 // LocalStorage implements the Storage interface for local filesystem operations.
 // It provides thread-safe file download, deletion, and management capabilities.
 type LocalStorage struct {
@@ -27,6 +24,11 @@ type LocalStorage struct {
 
 // NewLocalStorage creates a new local storage
 func NewLocalStorage(basePath string) (*LocalStorage, error) {
+	return NewLocalStorageWithTimeout(basePath, 10*time.Minute)
+}
+
+// NewLocalStorageWithTimeout creates a new local storage with custom download timeout
+func NewLocalStorageWithTimeout(basePath string, timeout time.Duration) (*LocalStorage, error) {
 	// Ensure base directory exists
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
@@ -35,7 +37,7 @@ func NewLocalStorage(basePath string) (*LocalStorage, error) {
 	return &LocalStorage{
 		basePath: basePath,
 		downloadClient: &http.Client{
-			Timeout: DefaultDownloadTimeout,
+			Timeout: timeout,
 		},
 	}, nil
 }

@@ -62,7 +62,7 @@ func (s *Scheduler) ensureInit() error {
 
 	// Initialize storage
 	var err error
-	s.storage, err = storage.NewLocalStorage(cfg.Storage.Local.Path)
+	s.storage, err = storage.NewLocalStorageWithTimeout(cfg.Storage.Local.Path, cfg.Storage.Local.DownloadTimeout)
 	if err != nil {
 		s.initErr = fmt.Errorf("failed to initialize storage: %w", err)
 		return s.initErr
@@ -82,7 +82,7 @@ func (s *Scheduler) ensureInit() error {
 		))
 	}
 	if cfg.Notify.Webhook.Enabled {
-		webhookNotifier, err := notify.NewWebhookNotifier(cfg.Notify.Webhook.URL)
+		webhookNotifier, err := notify.NewWebhookNotifierWithTimeout(cfg.Notify.Webhook.URL, cfg.Notify.Webhook.Timeout)
 		if err != nil {
 			s.initErr = fmt.Errorf("failed to create webhook notifier: %w", err)
 			return s.initErr

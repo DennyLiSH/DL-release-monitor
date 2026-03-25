@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -43,8 +44,9 @@ type StorageConfig struct {
 
 // LocalStorageConfig holds local storage configuration
 type LocalStorageConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Path    string `yaml:"path"`
+	Enabled         bool          `yaml:"enabled"`
+	Path            string        `yaml:"path"`
+	DownloadTimeout time.Duration `yaml:"download_timeout"` // download timeout (default: 10m)
 }
 
 // RetentionConfig holds retention policy configuration
@@ -73,8 +75,9 @@ type EmailConfig struct {
 
 // WebhookConfig holds webhook notification configuration
 type WebhookConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	URL     string `yaml:"url"`
+	Enabled bool          `yaml:"enabled"`
+	URL     string        `yaml:"url"`
+	Timeout time.Duration `yaml:"timeout"` // webhook timeout (default: 10s)
 }
 
 // Load reads and parses the configuration file
@@ -131,8 +134,14 @@ func setDefaults(cfg *Config) {
 	if cfg.Storage.Local.Path == "" {
 		cfg.Storage.Local.Path = "./data/downloads"
 	}
+	if cfg.Storage.Local.DownloadTimeout == 0 {
+		cfg.Storage.Local.DownloadTimeout = 10 * time.Minute
+	}
 	if cfg.Retention.MaxVersions == 0 {
 		cfg.Retention.MaxVersions = 5
+	}
+	if cfg.Notify.Webhook.Timeout == 0 {
+		cfg.Notify.Webhook.Timeout = 10 * time.Second
 	}
 }
 
