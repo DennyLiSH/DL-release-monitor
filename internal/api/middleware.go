@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 )
@@ -45,5 +46,12 @@ func AuthMiddleware(authKey string) func(http.Handler) http.Handler {
 func writeUnauthorized(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	w.Write([]byte(`{"error":"` + message + `"}`))
+	// Use json.Marshal to safely encode the message and avoid JSON injection
+	data, err := json.Marshal(map[string]string{"error": message})
+	if err != nil {
+		// This should never happen with a map[string]string
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Write(data)
 }

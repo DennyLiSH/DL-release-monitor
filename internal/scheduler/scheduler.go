@@ -24,7 +24,7 @@ type Scheduler struct {
 	ghClient    *github.Client
 	cfg         *config.Config
 	cfgMu       sync.RWMutex // protects cfg access
-	storage     *storage.LocalStorage
+	storage     storage.Storage // Use interface for flexibility
 	notifyMgr   *notify.Manager
 	parser      *release.Parser
 	ctx         context.Context
