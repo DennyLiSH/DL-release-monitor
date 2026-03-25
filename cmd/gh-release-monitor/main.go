@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,9 +18,21 @@ import (
 	"gh-release-monitor/internal/scheduler"
 )
 
+// getEnvOrDefault returns the value of the environment variable or the default value
+func getEnvOrDefault(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+	return defaultValue
+}
+
 func main() {
+	// Parse command line flags
+	configPath := flag.String("config", getEnvOrDefault("CONFIG_PATH", "config.yaml"), "path to config file")
+	flag.Parse()
+
 	// Load configuration
-	cfg, err := config.Load("config.yaml")
+	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}

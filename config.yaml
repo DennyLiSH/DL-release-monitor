@@ -3,6 +3,7 @@
 server:
   port: 8080
   base_url: "http://localhost:8080"
+  # auth_key: "your-secret-api-key"  # Optional: protect API endpoints with Bearer token auth
 
 github:
   token: "${GITHUB_TOKEN}"

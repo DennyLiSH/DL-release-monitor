@@ -25,6 +25,7 @@ type Config struct {
 type ServerConfig struct {
 	Port           int      `yaml:"port"`
 	BaseURL        string   `yaml:"base_url"`
+	AuthKey        string   `yaml:"auth_key"`        // API key for authentication (optional)
 	AllowedOrigins []string `yaml:"allowed_origins"` // CORS allowed origins, empty or ["*"] allows all
 }
 

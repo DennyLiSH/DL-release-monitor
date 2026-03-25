@@ -349,8 +349,9 @@ func (r *Router) GetConfig(w http.ResponseWriter, req *http.Request) {
 	// Return sanitized config (no secrets)
 	cfg := map[string]any{
 		"server": map[string]any{
-			"port":     r.cfg.Server.Port,
-			"base_url": r.cfg.Server.BaseURL,
+			"port":         r.cfg.Server.Port,
+			"base_url":     r.cfg.Server.BaseURL,
+			"auth_enabled": r.cfg.Server.AuthKey != "",
 		},
 		"github": map[string]any{
 			"poll_interval": r.cfg.GitHub.PollInterval,

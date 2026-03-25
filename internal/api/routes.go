@@ -60,29 +60,34 @@ func NewRouter(db *gorm.DB, ghClient *github.Client, sched *scheduler.Scheduler,
 		r.Get("/health", router.HealthCheck)
 		r.Get("/ready", router.ReadyCheck)
 
-		// Repository endpoints
-		r.Get("/repos", router.ListRepos)
-		r.Post("/repos", router.CreateRepo)
-		r.Get("/repos/{id}", router.GetRepo)
-		r.Put("/repos/{id}", router.UpdateRepo)
-		r.Delete("/repos/{id}", router.DeleteRepo)
+		// Protected API endpoints (auth required if auth_key is configured)
+		r.Group(func(r chi.Router) {
+			r.Use(AuthMiddleware(cfg.Server.AuthKey))
 
-		// Release endpoints
-		r.Get("/releases", router.ListReleases)
+			// Repository endpoints
+			r.Get("/repos", router.ListRepos)
+			r.Post("/repos", router.CreateRepo)
+			r.Get("/repos/{id}", router.GetRepo)
+			r.Put("/repos/{id}", router.UpdateRepo)
+			r.Delete("/repos/{id}", router.DeleteRepo)
 
-		// Download endpoints
-		r.Get("/downloads", router.ListDownloads)
+			// Release endpoints
+			r.Get("/releases", router.ListReleases)
 
-		// Check endpoint
-		r.Post("/check", router.TriggerCheck)
-		r.Post("/check/{id}", router.TriggerRepoCheck)
+			// Download endpoints
+			r.Get("/downloads", router.ListDownloads)
 
-		// Config endpoints
-		r.Get("/config", router.GetConfig)
-		r.Put("/config", router.UpdateConfig)
+			// Check endpoint
+			r.Post("/check", router.TriggerCheck)
+			r.Post("/check/{id}", router.TriggerRepoCheck)
 
-		// Status endpoint
-		r.Get("/status", router.GetStatus)
+			// Config endpoints
+			r.Get("/config", router.GetConfig)
+			r.Put("/config", router.UpdateConfig)
+
+			// Status endpoint
+			r.Get("/status", router.GetStatus)
+		})
 	})
 
 	// Serve static files (web UI)
