@@ -1,6 +1,7 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -32,7 +33,8 @@ func AuthMiddleware(authKey string) func(http.Handler) http.Handler {
 			}
 
 			token := parts[1]
-			if token != authKey {
+			// Use constant-time comparison to prevent timing attacks
+			if subtle.ConstantTimeCompare([]byte(token), []byte(authKey)) != 1 {
 				writeUnauthorized(w, "Invalid API key")
 				return
 			}

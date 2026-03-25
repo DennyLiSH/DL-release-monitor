@@ -67,8 +67,12 @@ func parsePagination(req *http.Request, defaultLimit, maxLimit int) (page, limit
 	}
 
 	if l := req.URL.Query().Get("limit"); l != "" {
-		if v, err := strconv.Atoi(l); err == nil && v > 0 && v <= maxLimit {
-			limit = v
+		if v, err := strconv.Atoi(l); err == nil && v > 0 {
+			if v > maxLimit {
+				limit = maxLimit
+			} else {
+				limit = v
+			}
 		}
 	}
 

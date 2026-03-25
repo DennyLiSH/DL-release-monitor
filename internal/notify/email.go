@@ -5,15 +5,83 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/smtp"
+	"net/url"
+	"strings"
 	"time"
 )
 
 const defaultWebhookTimeout = 10 * time.Second
+
+// ErrInvalidWebhookURL is returned when webhook URL fails security validation
+var ErrInvalidWebhookURL = errors.New("webhook URL is not allowed: possible SSRF risk")
+
+// validateWebhookURL validates the webhook URL to prevent SSRF attacks.
+// It ensures the URL:
+// - Uses http or https scheme
+// - Does not point to private/reserved IP addresses
+// - Does not use localhost or internal hostnames
+func validateWebhookURL(webhookURL string) error {
+	parsedURL, err := url.Parse(webhookURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+
+	// Only allow http and https schemes
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return fmt.Errorf("invalid scheme %q: only http and https are allowed", parsedURL.Scheme)
+	}
+
+	// Get hostname
+	host := parsedURL.Hostname()
+	if host == "" {
+		return errors.New("URL must have a hostname")
+	}
+
+	// Block localhost variations
+	lowerHost := strings.ToLower(host)
+	if lowerHost == "localhost" || lowerHost == "127.0.0.1" || lowerHost == "::1" {
+		return ErrInvalidWebhookURL
+	}
+
+	// Block internal hostnames
+	if strings.HasSuffix(lowerHost, ".local") ||
+		strings.HasSuffix(lowerHost, ".internal") ||
+		strings.HasSuffix(lowerHost, ".localhost") {
+		return ErrInvalidWebhookURL
+	}
+
+	// Resolve IP address to check for private ranges
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		// DNS lookup failed - could be a non-existent host
+		// Allow it to proceed, the HTTP request will fail anyway
+		return nil
+	}
+
+	for _, ip := range ips {
+		// Check for loopback (127.0.0.0/8, ::1)
+		if ip.IsLoopback() {
+			return ErrInvalidWebhookURL
+		}
+		// Check for private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+		if ip.IsPrivate() {
+			return ErrInvalidWebhookURL
+		}
+		// Check for link-local addresses (169.254.0.0/16, fe80::/10)
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+			return ErrInvalidWebhookURL
+		}
+	}
+
+	return nil
+}
 
 // EmailNotifier sends notifications via email
 type EmailNotifier struct {
@@ -169,14 +237,18 @@ type WebhookNotifier struct {
 	client *http.Client
 }
 
-// NewWebhookNotifier creates a new webhook notifier
-func NewWebhookNotifier(url string) *WebhookNotifier {
+// NewWebhookNotifier creates a new webhook notifier.
+// Returns an error if the URL fails SSRF security validation.
+func NewWebhookNotifier(url string) (*WebhookNotifier, error) {
+	if err := validateWebhookURL(url); err != nil {
+		return nil, fmt.Errorf("webhook URL validation failed: %w", err)
+	}
 	return &WebhookNotifier{
 		url: url,
 		client: &http.Client{
 			Timeout: defaultWebhookTimeout,
 		},
-	}
+	}, nil
 }
 
 // Name returns the notifier name

@@ -23,7 +23,7 @@ type Scheduler struct {
 	db          *gorm.DB
 	ghClient    *github.Client
 	cfg         *config.Config
-	cfgMu       sync.RWMutex // protects cfg access
+	cfgMu       sync.RWMutex    // protects cfg access
 	storage     storage.Storage // Use interface for flexibility
 	notifyMgr   *notify.Manager
 	parser      *release.Parser
@@ -82,7 +82,12 @@ func (s *Scheduler) ensureInit() error {
 		))
 	}
 	if cfg.Notify.Webhook.Enabled {
-		s.notifyMgr.AddNotifier(notify.NewWebhookNotifier(cfg.Notify.Webhook.URL))
+		webhookNotifier, err := notify.NewWebhookNotifier(cfg.Notify.Webhook.URL)
+		if err != nil {
+			s.initErr = fmt.Errorf("failed to create webhook notifier: %w", err)
+			return s.initErr
+		}
+		s.notifyMgr.AddNotifier(webhookNotifier)
 	}
 
 	// Initialize parser

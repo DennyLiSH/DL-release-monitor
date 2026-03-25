@@ -109,7 +109,7 @@ func TestParsePagination(t *testing.T) {
 			defaultLimit: 10,
 			maxLimit:     100,
 			wantPage:     1,
-			wantLimit:    10, // uses default when exceeds max
+			wantLimit:    100, // uses maxLimit when exceeds max
 		},
 		{
 			name:         "invalid page",
