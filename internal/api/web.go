@@ -1,9 +1,24 @@
 package api
 
 import (
-	"log"
+	"embed"
+	"log/slog"
 	"net/http"
 )
+
+//go:embed templates/index.html
+var templatesFS embed.FS
+
+// indexHTML is the cached content of index.html
+var indexHTML []byte
+
+func init() {
+	var err error
+	indexHTML, err = templatesFS.ReadFile("templates/index.html")
+	if err != nil {
+		panic("failed to read embedded index.html: " + err.Error())
+	}
+}
 
 // ServeIndex serves the web UI index page
 func (r *Router) ServeIndex(w http.ResponseWriter, req *http.Request) {
@@ -16,248 +31,6 @@ func (r *Router) ServeIndex(w http.ResponseWriter, req *http.Request) {
 	// Serve the embedded index.html
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if _, err := w.Write(indexHTML); err != nil {
-		log.Printf("Failed to write index.html: %v", err)
+		slog.Error("Failed to write index.html", "error", err)
 	}
 }
-
-// indexHTML is the embedded web UI
-var indexHTML = []byte(`<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GitHub Release Monitor</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif; background: #f5f5f5; min-height: 100vh; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        header { background: #24292e; color: white; padding: 16px 0; margin-bottom: 20px; }
-        header h1 { font-size: 20px; font-weight: 600; }
-        header .container { display: flex; justify-content: space-between; align-items: center; }
-        .btn { background: #0366d6; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
-        .btn:hover { background: #0256c5; }
-        .btn-secondary { background: #6a737d; }
-        .btn-danger { background: #d73a49; }
-        .card { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 20px; }
-        .card-header { padding: 16px; border-bottom: 1px solid #e1e4e8; font-weight: 600; }
-        .card-body { padding: 16px; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e1e4e8; }
-        th { font-weight: 600; background: #f6f8fa; }
-        .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; font-weight: 500; }
-        .badge-success { background: #28a745; color: white; }
-        .badge-warning { background: #ffc107; color: black; }
-        .badge-danger { background: #dc3545; color: white; }
-        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; }
-        .modal.active { display: flex; justify-content: center; align-items: center; }
-        .modal-content { background: white; padding: 24px; border-radius: 8px; width: 400px; max-width: 90%; }
-        .modal-content h2 { margin-bottom: 16px; }
-        .form-group { margin-bottom: 16px; }
-        .form-group label { display: block; margin-bottom: 4px; font-weight: 500; }
-        .form-group input { width: 100%; padding: 8px; border: 1px solid #e1e4e8; border-radius: 4px; }
-        .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 20px; }
-        .status-card { background: white; padding: 16px; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
-        .status-card h3 { font-size: 14px; color: #6a737d; margin-bottom: 4px; }
-        .status-card .value { font-size: 24px; font-weight: 600; }
-        .actions { display: flex; gap: 8px; }
-        .loading { text-align: center; padding: 40px; color: #6a737d; }
-    </style>
-</head>
-<body>
-    <header>
-        <div class="container">
-            <h1>GitHub Release Monitor</h1>
-            <div class="actions">
-                <button class="btn btn-secondary" onclick="checkNow()">Check Now</button>
-                <button class="btn" onclick="showAddModal()">Add Repository</button>
-            </div>
-        </div>
-    </header>
-
-    <div class="container">
-        <div class="status-grid" id="statusGrid">
-            <div class="status-card">
-                <h3>Repositories</h3>
-                <div class="value" id="repoCount">-</div>
-            </div>
-            <div class="status-card">
-                <h3>Releases</h3>
-                <div class="value" id="releaseCount">-</div>
-            </div>
-            <div class="status-card">
-                <h3>Downloads</h3>
-                <div class="value" id="downloadCount">-</div>
-            </div>
-            <div class="status-card">
-                <h3>Storage</h3>
-                <div class="value" id="storageSize">-</div>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">Repositories</div>
-            <div class="card-body">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Repository</th>
-                            <th>Status</th>
-                            <th>Last Checked</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="repoList">
-                        <tr><td colspan="4" class="loading">Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <div class="card">
-            <div class="card-header">Recent Downloads</div>
-            <div class="card-body">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Repository</th>
-                            <th>Version</th>
-                            <th>File</th>
-                            <th>Duration</th>
-                            <th>Time</th>
-                        </tr>
-                    </thead>
-                    <tbody id="downloadList">
-                        <tr><td colspan="5" class="loading">Loading...</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-
-    <div class="modal" id="addModal">
-        <div class="modal-content">
-            <h2>Add Repository</h2>
-            <form onsubmit="addRepo(event)">
-                <div class="form-group">
-                    <label>Repository (owner/repo)</label>
-                    <input type="text" id="repoFullName" placeholder="golang/go" required>
-                </div>
-                <div style="display: flex; gap: 8px;">
-                    <button type="button" class="btn btn-secondary" onclick="hideAddModal()">Cancel</button>
-                    <button type="submit" class="btn">Add</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <script>
-        async function fetchAPI(endpoint, options = {}) {
-            const res = await fetch('/api' + endpoint, options);
-            return res.json();
-        }
-
-        async function loadStatus() {
-            const data = await fetchAPI('/status');
-            document.getElementById('repoCount').textContent = data.repo_count;
-            document.getElementById('releaseCount').textContent = data.release_count;
-            document.getElementById('downloadCount').textContent = data.download_count;
-            document.getElementById('storageSize').textContent = formatBytes(data.storage_size);
-        }
-
-        async function loadRepos() {
-            const data = await fetchAPI('/repos');
-            const tbody = document.getElementById('repoList');
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#6a737d;">No repositories yet. Add one to get started.</td></tr>';
-                return;
-            }
-            tbody.innerHTML = data.map(repo => '<tr>' +
-                '<td><a href="https://github.com/' + repo.full_name + '" target="_blank">' + repo.full_name + '</a></td>' +
-                '<td><span class="badge ' + (repo.enabled ? 'badge-success' : 'badge-warning') + '">' + (repo.enabled ? 'Enabled' : 'Disabled') + '</span></td>' +
-                '<td>' + (repo.last_checked_at ? new Date(repo.last_checked_at).toLocaleString() : 'Never') + '</td>' +
-                '<td>' +
-                    '<button class="btn btn-secondary" onclick="checkRepo(' + repo.id + ')">Check</button> ' +
-                    '<button class="btn btn-danger" onclick="deleteRepo(' + repo.id + ', \'' + repo.full_name + '\')">Delete</button>' +
-                '</td>' +
-            '</tr>').join('');
-        }
-
-        async function loadDownloads() {
-            const data = await fetchAPI('/downloads');
-            const tbody = document.getElementById('downloadList');
-            if (data.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#6a737d;">No downloads yet.</td></tr>';
-                return;
-            }
-            tbody.innerHTML = data.map(d => '<tr>' +
-                '<td>' + d.repo_name + '</td>' +
-                '<td>' + d.version + '</td>' +
-                '<td>' + d.file_name + '</td>' +
-                '<td>' + d.duration + 'ms</td>' +
-                '<td>' + new Date(d.created_at).toLocaleString() + '</td>' +
-            '</tr>').join('');
-        }
-
-        function showAddModal() {
-            document.getElementById('addModal').classList.add('active');
-            document.getElementById('repoFullName').focus();
-        }
-
-        function hideAddModal() {
-            document.getElementById('addModal').classList.remove('active');
-            document.getElementById('repoFullName').value = '';
-        }
-
-        async function addRepo(e) {
-            e.preventDefault();
-            const fullName = document.getElementById('repoFullName').value.trim();
-            try {
-                await fetchAPI('/repos', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ full_name: fullName, enabled: true })
-                });
-                hideAddModal();
-                loadRepos();
-                loadStatus();
-            } catch (err) {
-                alert('Failed to add repository: ' + err.message);
-            }
-        }
-
-        async function deleteRepo(id, name) {
-            if (!confirm('Delete ' + name + '? This will also delete all downloaded files.')) return;
-            await fetchAPI('/repos/' + id, { method: 'DELETE' });
-            loadRepos();
-            loadStatus();
-        }
-
-        async function checkNow() {
-            await fetchAPI('/check', { method: 'POST' });
-            alert('Check triggered. Refresh in a moment to see updates.');
-        }
-
-        async function checkRepo(id) {
-            await fetchAPI('/check/' + id, { method: 'POST' });
-            alert('Check triggered. Refresh in a moment to see updates.');
-        }
-
-        function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            const k = 1024;
-            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
-            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-        }
-
-        // Initial load
-        loadStatus();
-        loadRepos();
-        loadDownloads();
-
-        // Auto refresh every 30 seconds
-        setInterval(() => { loadStatus(); loadDownloads(); }, 30000);
-    </script>
-</body>
-</html>
-`)

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/smtp"
@@ -182,7 +182,7 @@ func (n *EmailNotifier) sendWithTLS(addr string, msg []byte) error {
 	}
 	defer func() {
 		if err := conn.Close(); err != nil {
-			log.Printf("Failed to close SMTP connection: %v", err)
+			slog.Error("Failed to close SMTP connection", "error", err)
 		}
 	}()
 
@@ -192,7 +192,7 @@ func (n *EmailNotifier) sendWithTLS(addr string, msg []byte) error {
 	}
 	defer func() {
 		if err := client.Close(); err != nil {
-			log.Printf("Failed to close SMTP client: %v", err)
+			slog.Error("Failed to close SMTP client", "error", err)
 		}
 	}()
 
@@ -307,7 +307,7 @@ func (n *WebhookNotifier) Send(ctx context.Context, notification *Notification) 
 
 	// Read and discard response body to ensure connection can be reused
 	if _, err := io.Copy(io.Discard, resp.Body); err != nil {
-		log.Printf("Failed to drain webhook response body: %v", err)
+		slog.Warn("Failed to drain webhook response body", "error", err)
 	}
 
 	if resp.StatusCode >= 400 {

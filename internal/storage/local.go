@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,7 +102,7 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 	if err != nil {
 		out.Close()
 		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			log.Printf("warning: failed to remove temp file %s: %v", tmpPath, removeErr)
+			slog.Warn("Failed to remove temp file", "path", tmpPath, "error", removeErr)
 		}
 		if errors.Is(err, context.Canceled) {
 			return "", "", 0, fmt.Errorf("download canceled during write: %w", err)
@@ -113,7 +113,7 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 	// Close file before renaming
 	if err := out.Close(); err != nil {
 		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			log.Printf("warning: failed to remove temp file %s: %v", tmpPath, removeErr)
+			slog.Warn("Failed to remove temp file", "path", tmpPath, "error", removeErr)
 		}
 		return "", "", 0, fmt.Errorf("failed to close file: %w", err)
 	}
@@ -121,7 +121,7 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 	// Atomic rename from temp to final destination
 	if err := os.Rename(tmpPath, destPath); err != nil {
 		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
-			log.Printf("warning: failed to remove temp file %s: %v", tmpPath, removeErr)
+			slog.Warn("Failed to remove temp file", "path", tmpPath, "error", removeErr)
 		}
 		return "", "", 0, fmt.Errorf("failed to rename temp file: %w", err)
 	}

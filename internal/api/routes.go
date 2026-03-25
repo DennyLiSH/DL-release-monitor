@@ -18,7 +18,7 @@ import (
 type Router struct {
 	*chi.Mux
 	db        *gorm.DB
-	ghClient  *github.Client
+	ghClient  github.ClientInterface
 	sched     *scheduler.Scheduler
 	cfg       *config.Config
 	cfgMu     sync.RWMutex // protects cfg access
@@ -26,7 +26,7 @@ type Router struct {
 }
 
 // NewRouter creates a new API router
-func NewRouter(db *gorm.DB, ghClient *github.Client, sched *scheduler.Scheduler, cfg *config.Config) *Router {
+func NewRouter(db *gorm.DB, ghClient github.ClientInterface, sched *scheduler.Scheduler, cfg *config.Config) *Router {
 	r := chi.NewRouter()
 
 	router := &Router{

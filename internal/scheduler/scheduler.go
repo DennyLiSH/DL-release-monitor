@@ -3,7 +3,7 @@ package scheduler
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -21,16 +21,15 @@ import (
 // Scheduler handles periodic release checking
 type Scheduler struct {
 	db          *gorm.DB
-	ghClient    *github.Client
+	ghClient    github.ClientInterface
 	cfg         *config.Config
-	cfgMu       sync.RWMutex    // protects cfg access
 	storage     storage.Storage // Use interface for flexibility
 	notifyMgr   *notify.Manager
 	parser      *release.Parser
 	ctx         context.Context
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
-	mu          sync.Mutex
+	mu          sync.RWMutex // protects all fields below
 	running     bool
 	checking    bool // prevents concurrent checkAllRepos
 	initialized bool
@@ -38,7 +37,7 @@ type Scheduler struct {
 }
 
 // New creates a new scheduler
-func New(db *gorm.DB, ghClient *github.Client, cfg *config.Config) *Scheduler {
+func New(db *gorm.DB, ghClient github.ClientInterface, cfg *config.Config) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
 		db:       db,
@@ -111,7 +110,7 @@ func (s *Scheduler) Start() {
 
 	// Initialize dependencies
 	if err := s.ensureInit(); err != nil {
-		log.Printf("Failed to initialize scheduler: %v", err)
+		slog.Error("Failed to initialize scheduler", "error", err)
 		s.mu.Lock()
 		s.running = false
 		s.mu.Unlock()
@@ -123,7 +122,7 @@ func (s *Scheduler) Start() {
 	go s.run()
 
 	cfg := s.getConfig()
-	log.Printf("Scheduler started with poll interval: %d minutes", cfg.GitHub.PollInterval)
+	slog.Info("Scheduler started", "poll_interval_minutes", cfg.GitHub.PollInterval)
 }
 
 // Stop stops the scheduler
@@ -145,7 +144,7 @@ func (s *Scheduler) Stop() {
 	s.initErr = nil
 	s.mu.Unlock()
 
-	log.Println("Scheduler stopped")
+	slog.Info("Scheduler stopped")
 }
 
 // run is the main scheduler loop
@@ -173,7 +172,7 @@ func (s *Scheduler) run() {
 func (s *Scheduler) CheckNow() {
 	// Ensure dependencies are initialized
 	if err := s.ensureInit(); err != nil {
-		log.Printf("Cannot check now: %v", err)
+		slog.Error("Cannot check now", "error", err)
 		return
 	}
 
@@ -189,7 +188,7 @@ func (s *Scheduler) CheckNow() {
 		defer s.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Panic recovered in CheckNow: %v", r)
+				slog.Error("Panic recovered in CheckNow", "panic", r)
 			}
 		}()
 		s.checkAllRepos()
@@ -220,7 +219,7 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 		defer s.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Panic recovered in CheckRepoNow: %v", r)
+				slog.Error("Panic recovered in CheckRepoNow", "panic", r)
 			}
 		}()
 		s.checkRepo(&repo)
@@ -233,7 +232,7 @@ func (s *Scheduler) checkAllRepos() {
 	s.mu.Lock()
 	if s.checking {
 		s.mu.Unlock()
-		log.Println("Check already in progress, skipping")
+		slog.Debug("Check already in progress, skipping")
 		return
 	}
 	s.checking = true
@@ -247,11 +246,11 @@ func (s *Scheduler) checkAllRepos() {
 
 	var repos []models.Repo
 	if err := s.db.Where("enabled = ?", true).Find(&repos).Error; err != nil {
-		log.Printf("Failed to fetch repos: %v", err)
+		slog.Error("Failed to fetch repos", "error", err)
 		return
 	}
 
-	log.Printf("Checking %d repos...", len(repos))
+	slog.Info("Checking repos", "count", len(repos))
 
 	for i := range repos {
 		select {
@@ -263,10 +262,10 @@ func (s *Scheduler) checkAllRepos() {
 	}
 }
 
-// getContext returns the scheduler's context under lock protection
+// getContext returns the scheduler's context under read lock protection
 func (s *Scheduler) getContext() context.Context {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.ctx
 }
 
@@ -284,16 +283,16 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 	// Get releases from GitHub
 	releases, err := s.ghClient.GetReleaseList(ctx, repo.Owner, repo.Name)
 	if err != nil {
-		log.Printf("[%s] Failed to fetch releases: %v", repo.FullName, err)
+		slog.Error("Failed to fetch releases", "repo", repo.FullName, "error", err)
 		return
 	}
 
 	// Update last checked time
 	if err := s.db.WithContext(ctx).Model(repo).Update("last_checked_at", time.Now()).Error; err != nil {
-		log.Printf("[%s] Failed to update last_checked_at: %v", repo.FullName, err)
+		slog.Error("Failed to update last_checked_at", "repo", repo.FullName, "error", err)
 	}
 
-	log.Printf("[%s] Found %d releases", repo.FullName, len(releases))
+	slog.Info("Found releases", "repo", repo.FullName, "count", len(releases))
 
 	// Process each release
 	for _, ghRelease := range releases {
@@ -345,11 +344,11 @@ func (s *Scheduler) processRelease(ctx context.Context, repo *models.Repo, ghRel
 	}
 
 	if err := s.db.WithContext(ctx).Create(&newRelease).Error; err != nil {
-		log.Printf("[%s] Failed to create release record: %v", repo.FullName, err)
+		slog.Error("Failed to create release record", "repo", repo.FullName, "error", err)
 		return false
 	}
 
-	log.Printf("[%s] New release: %s", repo.FullName, ghRelease.TagName)
+	slog.Info("New release", "repo", repo.FullName, "tag", ghRelease.TagName)
 
 	// Process assets
 	downloadedAssets := s.processReleaseAssets(ctx, repo, &newRelease, ghRelease.Assets)
@@ -384,7 +383,7 @@ func (s *Scheduler) processReleaseAssets(ctx context.Context, repo *models.Repo,
 		}
 
 		if err := s.db.WithContext(ctx).Create(&asset).Error; err != nil {
-			log.Printf("[%s] Failed to create asset record: %v", repo.FullName, err)
+			slog.Error("Failed to create asset record", "repo", repo.FullName, "error", err)
 			continue
 		}
 
@@ -407,7 +406,7 @@ func (s *Scheduler) sendNotification(ctx context.Context, repo *models.Repo, rel
 		HTMLURL:    release.HTMLURL,
 	})
 	if len(errs) > 0 {
-		log.Printf("[%s] Some notifications failed: %v", repo.FullName, errs)
+		slog.Error("Some notifications failed", "repo", repo.FullName, "errors", errs)
 	}
 }
 
@@ -415,7 +414,7 @@ func (s *Scheduler) sendNotification(ctx context.Context, repo *models.Repo, rel
 func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *models.Release, asset *models.Asset) {
 	// Mark as downloading
 	if err := s.db.Model(asset).Update("status", models.AssetStatusDownloading).Error; err != nil {
-		log.Printf("[%s] Failed to update asset status to downloading: %v", repo.FullName, err)
+		slog.Error("Failed to update asset status to downloading", "repo", repo.FullName, "error", err)
 	}
 
 	// Use provided context for cancellation support
@@ -425,9 +424,9 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 			"status":        models.AssetStatusFailed,
 			"error_message": err.Error(),
 		}).Error; err != nil {
-			log.Printf("[%s] Failed to update asset failure status: %v", repo.FullName, err)
+			slog.Error("Failed to update asset failure status", "repo", repo.FullName, "error", err)
 		}
-		log.Printf("[%s] Failed to download %s: %v", repo.FullName, asset.Name, err)
+		slog.Error("Failed to download asset", "repo", repo.FullName, "asset", asset.Name, "error", err)
 
 		// Log failure
 		if err := s.db.Create(&models.DownloadLog{
@@ -440,7 +439,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 			Success:  false,
 			Error:    err.Error(),
 		}).Error; err != nil {
-			log.Printf("[%s] Failed to create download log: %v", repo.FullName, err)
+			slog.Error("Failed to create download log", "repo", repo.FullName, "error", err)
 		}
 		return
 	}
@@ -451,7 +450,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 		"sha256":     sha256sum,
 		"status":     models.AssetStatusDone,
 	}).Error; err != nil {
-		log.Printf("[%s] Failed to update asset success status: %v", repo.FullName, err)
+		slog.Error("Failed to update asset success status", "repo", repo.FullName, "error", err)
 	}
 
 	// Log success
@@ -464,16 +463,16 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 		Duration: duration,
 		Success:  true,
 	}).Error; err != nil {
-		log.Printf("[%s] Failed to create download log: %v", repo.FullName, err)
+		slog.Error("Failed to create download log", "repo", repo.FullName, "error", err)
 	}
 
-	log.Printf("[%s] Downloaded %s (%d ms)", repo.FullName, asset.Name, duration)
+	slog.Info("Downloaded asset", "repo", repo.FullName, "asset", asset.Name, "duration_ms", duration)
 }
 
 // getConfig returns a copy of the current config under read lock
 func (s *Scheduler) getConfig() config.Config {
-	s.cfgMu.RLock()
-	defer s.cfgMu.RUnlock()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return *s.cfg
 }
 
@@ -487,7 +486,7 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 	// Get all releases for this repo
 	var releases []models.Release
 	if err := s.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Find(&releases).Error; err != nil {
-		log.Printf("[%s] Failed to fetch releases for retention: %v", repo.FullName, err)
+		slog.Error("Failed to fetch releases for retention", "repo", repo.FullName, "error", err)
 		return
 	}
 
@@ -500,7 +499,7 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 	if err := s.db.Joins("JOIN releases ON releases.id = assets.release_id").
 		Where("releases.repo_id = ?", repo.ID).
 		Find(&assets).Error; err != nil {
-		log.Printf("[%s] Failed to fetch assets for retention: %v", repo.FullName, err)
+		slog.Error("Failed to fetch assets for retention", "repo", repo.FullName, "error", err)
 		return
 	}
 
@@ -512,18 +511,18 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 	for _, asset := range toDelete {
 		if asset.LocalPath != "" {
 			if err := s.storage.Delete(asset.LocalPath); err != nil {
-				log.Printf("[%s] Failed to delete %s: %v", repo.FullName, asset.Name, err)
+				slog.Error("Failed to delete asset file", "repo", repo.FullName, "asset", asset.Name, "error", err)
 			} else {
-				log.Printf("[%s] Deleted %s (retention policy)", repo.FullName, asset.Name)
+				slog.Info("Deleted asset (retention policy)", "repo", repo.FullName, "asset", asset.Name)
 			}
 		}
 		if err := s.db.Delete(&asset).Error; err != nil {
-			log.Printf("[%s] Failed to delete asset record: %v", repo.FullName, err)
+			slog.Error("Failed to delete asset record", "repo", repo.FullName, "error", err)
 		}
 	}
 
 	// Delete releases with no assets
 	if err := s.db.Where("repo_id = ? AND id NOT IN (SELECT DISTINCT release_id FROM assets)", repo.ID).Delete(&models.Release{}).Error; err != nil {
-		log.Printf("[%s] Failed to delete orphan releases: %v", repo.FullName, err)
+		slog.Error("Failed to delete orphan releases", "repo", repo.FullName, "error", err)
 	}
 }

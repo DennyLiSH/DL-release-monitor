@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -231,7 +231,7 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 		Where("releases.repo_id = ?", repo.ID).
 		Where("assets.local_path != ''").
 		Pluck("assets.local_path", &assetPaths).Error; err != nil {
-		log.Printf("Failed to fetch asset paths for deletion: %v", err)
+		slog.Error("Failed to fetch asset paths for deletion", "error", err)
 	}
 
 	// 2. Delete from database with transaction (atomic operation)
@@ -261,7 +261,7 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Panic recovered in DeleteRepo cleanup: %v", r)
+				slog.Error("Panic recovered in DeleteRepo cleanup", "panic", r)
 			}
 		}()
 
@@ -271,17 +271,17 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 
 		storageBackend, err := storage.NewLocalStorage(r.cfg.Storage.Local.Path)
 		if err != nil {
-			log.Printf("Failed to initialize storage for cleanup: %v", err)
+			slog.Error("Failed to initialize storage for cleanup", "error", err)
 			return
 		}
 		for _, path := range assetPaths {
 			select {
 			case <-ctx.Done():
-				log.Printf("File cleanup timed out, some files may remain")
+				slog.Warn("File cleanup timed out, some files may remain")
 				return
 			default:
 				if err := storageBackend.Delete(path); err != nil {
-					log.Printf("Warning: failed to delete file %s: %v", path, err)
+					slog.Warn("Failed to delete file", "path", path, "error", err)
 				}
 			}
 		}
@@ -420,19 +420,19 @@ func (r *Router) GetStatus(w http.ResponseWriter, req *http.Request) {
 	var downloadCount int64
 
 	if err := r.db.Model(&models.Repo{}).Count(&repoCount).Error; err != nil {
-		log.Printf("Failed to count repos: %v", err)
+		slog.Error("Failed to count repos", "error", err)
 		errors = append(errors, fmt.Sprintf("repo_count: %v", err))
 	}
 	if err := r.db.Model(&models.Release{}).Count(&releaseCount).Error; err != nil {
-		log.Printf("Failed to count releases: %v", err)
+		slog.Error("Failed to count releases", "error", err)
 		errors = append(errors, fmt.Sprintf("release_count: %v", err))
 	}
 	if err := r.db.Model(&models.Asset{}).Where("status = ?", models.AssetStatusDone).Count(&assetCount).Error; err != nil {
-		log.Printf("Failed to count assets: %v", err)
+		slog.Error("Failed to count assets", "error", err)
 		errors = append(errors, fmt.Sprintf("asset_count: %v", err))
 	}
 	if err := r.db.Model(&models.DownloadLog{}).Where("success = ?", true).Count(&downloadCount).Error; err != nil {
-		log.Printf("Failed to count downloads: %v", err)
+		slog.Error("Failed to count downloads", "error", err)
 		errors = append(errors, fmt.Sprintf("download_count: %v", err))
 	}
 
@@ -441,7 +441,7 @@ func (r *Router) GetStatus(w http.ResponseWriter, req *http.Request) {
 	if err := r.db.Model(&models.Asset{}).
 		Where("status = ?", models.AssetStatusDone).
 		Select("COALESCE(SUM(size), 0)").Row().Scan(&storageSize); err != nil {
-		log.Printf("Failed to calculate storage size: %v", err)
+		slog.Error("Failed to calculate storage size", "error", err)
 		errors = append(errors, fmt.Sprintf("storage_size: %v", err))
 	}
 
@@ -505,7 +505,7 @@ func (r *Router) writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(data); err != nil {
-		log.Printf("Failed to encode JSON response: %v", err)
+		slog.Error("Failed to encode JSON response", "error", err)
 	}
 }
 

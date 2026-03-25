@@ -4,7 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -27,6 +27,12 @@ func getEnvOrDefault(key, defaultValue string) string {
 }
 
 func main() {
+	// Initialize structured logger
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
 	// Parse command line flags
 	configPath := flag.String("config", getEnvOrDefault("CONFIG_PATH", "config.yaml"), "path to config file")
 	flag.Parse()
@@ -34,27 +40,30 @@ func main() {
 	// Load configuration
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
+		slog.Error("Failed to load config", "error", err)
+		os.Exit(1)
 	}
 
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
-		log.Fatalf("Invalid configuration: %v", err)
+		slog.Error("Invalid configuration", "error", err)
+		os.Exit(1)
 	}
 
 	// Initialize database
 	db, err := database.Init(cfg.Storage.Local.Path)
 	if err != nil {
-		log.Fatalf("Failed to initialize database: %v", err)
+		slog.Error("Failed to initialize database", "error", err)
+		os.Exit(1)
 	}
 	defer func() {
 		sqlDB, err := db.DB()
 		if err != nil {
-			log.Printf("Failed to get underlying DB: %v", err)
+			slog.Error("Failed to get underlying DB", "error", err)
 			return
 		}
 		if err := sqlDB.Close(); err != nil {
-			log.Printf("Failed to close database: %v", err)
+			slog.Error("Failed to close database", "error", err)
 		}
 	}()
 
@@ -82,7 +91,7 @@ func main() {
 	// Start server in goroutine
 	serverErr := make(chan error, 1)
 	go func() {
-		log.Printf("Server starting on port %d", cfg.Server.Port)
+		slog.Info("Server starting", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			select {
 			case serverErr <- err:
@@ -97,9 +106,9 @@ func main() {
 
 	select {
 	case <-quit:
-		log.Println("Shutting down server...")
+		slog.Info("Shutting down server...")
 	case err := <-serverErr:
-		log.Printf("Server failed: %v", err)
+		slog.Error("Server failed", "error", err)
 	}
 
 	// Graceful shutdown
@@ -107,8 +116,8 @@ func main() {
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+		slog.Error("Server forced to shutdown", "error", err)
 	}
 
-	log.Println("Server exited")
+	slog.Info("Server exited")
 }

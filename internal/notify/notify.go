@@ -3,7 +3,7 @@ package notify
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 )
 
@@ -62,10 +62,10 @@ func (m *Manager) Send(ctx context.Context, notification *Notification) []error 
 			break
 		}
 		if err := n.Send(ctx, notification); err != nil {
-			log.Printf("[%s] Failed to send notification: %v", n.Name(), err)
+			slog.Error("Failed to send notification", "notifier", n.Name(), "error", err)
 			errs = append(errs, fmt.Errorf("[%s]: %w", n.Name(), err))
 		} else {
-			log.Printf("[%s] Notification sent for %s %s", n.Name(), notification.RepoName, notification.Version)
+			slog.Info("Notification sent", "notifier", n.Name(), "repo", notification.RepoName, "version", notification.Version)
 		}
 	}
 
