@@ -123,11 +123,11 @@ func TestNewWebhookNotifier_InvalidURL(t *testing.T) {
 
 // mockNotifier is a mock implementation of Notifier interface
 type mockNotifier struct {
-	name    string
-	err     error
-	called  bool
-	delay   time.Duration
-	mu      sync.Mutex
+	name   string
+	err    error
+	called bool
+	delay  time.Duration
+	mu     sync.Mutex
 }
 
 func (m *mockNotifier) Name() string {

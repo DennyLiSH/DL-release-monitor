@@ -17,10 +17,8 @@ import (
 	"time"
 )
 
-const defaultWebhookTimeout = 10 * time.Second
-
 // DefaultWebhookTimeout is the default timeout for webhook notifications
-var DefaultWebhookTimeout = defaultWebhookTimeout
+const DefaultWebhookTimeout = 10 * time.Second
 
 // ErrInvalidWebhookURL is returned when webhook URL fails security validation
 var ErrInvalidWebhookURL = errors.New("webhook URL is not allowed: possible SSRF risk")
@@ -115,7 +113,7 @@ func (n *EmailNotifier) Name() string {
 	return "email"
 }
 
-// Send sends an email notification. Context is currently unused but provided for interface compatibility.
+// Send sends an email notification with context support for cancellation and timeout.
 func (n *EmailNotifier) Send(ctx context.Context, notification *Notification) error {
 	// Check context before starting
 	if ctx.Err() != nil {
@@ -136,21 +134,36 @@ func (n *EmailNotifier) Send(ctx context.Context, notification *Notification) er
 
 	addr := fmt.Sprintf("%s:%d", n.host, n.port)
 
-	if n.useTLS {
-		return n.sendWithTLS(addr, msg.Bytes())
+	// Use a channel to handle context cancellation for SMTP operations
+	type result struct {
+		err error
 	}
+	resultCh := make(chan result, 1)
 
-	// Fallback to standard SendMail (for backwards compatibility)
-	var auth smtp.Auth
-	if n.username != "" && n.password != "" {
-		auth = smtp.PlainAuth("", n.username, n.password, n.host)
+	go func() {
+		var err error
+		if n.useTLS {
+			err = n.sendWithTLS(addr, msg.Bytes())
+		} else {
+			// Fallback to standard SendMail (for backwards compatibility)
+			var auth smtp.Auth
+			if n.username != "" && n.password != "" {
+				auth = smtp.PlainAuth("", n.username, n.password, n.host)
+			}
+			err = smtp.SendMail(addr, auth, n.from, []string{n.to}, msg.Bytes())
+		}
+		resultCh <- result{err: err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("email send cancelled: %w", ctx.Err())
+	case res := <-resultCh:
+		if res.err != nil {
+			return fmt.Errorf("failed to send email: %w", res.err)
+		}
+		return nil
 	}
-
-	if err := smtp.SendMail(addr, auth, n.from, []string{n.to}, msg.Bytes()); err != nil {
-		return fmt.Errorf("failed to send email: %w", err)
-	}
-
-	return nil
 }
 
 // sendWithTLS sends email using explicit TLS connection

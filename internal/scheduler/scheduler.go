@@ -182,9 +182,9 @@ func (s *Scheduler) CheckNow() {
 		s.mu.Unlock()
 		return
 	}
+	s.wg.Add(1) // Add to WaitGroup while holding lock to prevent race
 	s.mu.Unlock()
 
-	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		defer func() {
@@ -213,9 +213,9 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 		s.mu.Unlock()
 		return nil
 	}
+	s.wg.Add(1) // Add to WaitGroup while holding lock to prevent race
 	s.mu.Unlock()
 
-	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
 		defer func() {
@@ -303,9 +303,7 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 		default:
 		}
 
-		if s.processRelease(ctx, repo, ghRelease) {
-			// New release was processed successfully
-		}
+		s.processRelease(ctx, repo, ghRelease)
 	}
 
 	// Apply retention policy

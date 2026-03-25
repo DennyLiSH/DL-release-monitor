@@ -26,7 +26,7 @@ const (
 
 // Client wraps the GitHub API client with retry logic and rate limiting.
 type Client struct {
-	client        *gh.Client
+	client          *gh.Client
 	apiRequestDelay time.Duration
 }
 

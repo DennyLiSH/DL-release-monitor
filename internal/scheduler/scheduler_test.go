@@ -71,8 +71,8 @@ func testConfig(tempDir string) *config.Config {
 			},
 		},
 		Retention: config.RetentionConfig{
-			MaxVersions:    10,
-			KeepLastMajor:  true,
+			MaxVersions:   10,
+			KeepLastMajor: true,
 		},
 	}
 }
