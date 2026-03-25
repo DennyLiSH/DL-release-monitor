@@ -60,6 +60,7 @@ func main() {
 
 	// Create GitHub client
 	ghClient := github.NewClient(cfg.GitHub.Token)
+	ghClient.SetAPIDelay(time.Duration(cfg.GitHub.APIDelay) * time.Millisecond)
 
 	// Create scheduler
 	sched := scheduler.New(db, ghClient, cfg)

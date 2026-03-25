@@ -33,6 +33,7 @@ type ServerConfig struct {
 type GitHubConfig struct {
 	Token        string `yaml:"token"`
 	PollInterval int    `yaml:"poll_interval"` // minutes
+	APIDelay     int    `yaml:"api_delay"`     // milliseconds between API requests (default: 1000)
 }
 
 // StorageConfig holds storage configuration
@@ -123,6 +124,9 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.GitHub.PollInterval == 0 {
 		cfg.GitHub.PollInterval = 30
+	}
+	if cfg.GitHub.APIDelay == 0 {
+		cfg.GitHub.APIDelay = 1000 // 1 second default
 	}
 	if cfg.Storage.Local.Path == "" {
 		cfg.Storage.Local.Path = "./data/downloads"

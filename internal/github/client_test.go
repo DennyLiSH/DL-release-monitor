@@ -322,7 +322,7 @@ func TestValidateRepoWithMockServer(t *testing.T) {
 	// Create client pointing to mock server
 	ghClient := gh.NewClient(nil)
 	ghClient.BaseURL, _ = ghClient.BaseURL.Parse(server.URL + "/")
-	client := &Client{client: ghClient}
+	client := &Client{client: ghClient, apiRequestDelay: 0} // Disable delay for tests
 
 	// Test valid repo
 	ctx := context.Background()
@@ -360,7 +360,7 @@ func TestGetLatestReleaseWithMockServer(t *testing.T) {
 	// Create client pointing to mock server
 	ghClient := gh.NewClient(nil)
 	ghClient.BaseURL, _ = ghClient.BaseURL.Parse(server.URL + "/")
-	client := &Client{client: ghClient}
+	client := &Client{client: ghClient, apiRequestDelay: 0} // Disable delay for tests
 
 	ctx := context.Background()
 	release, err := client.GetLatestRelease(ctx, "owner", "repo")
@@ -386,7 +386,7 @@ func TestGetLatestReleaseContextCancellation(t *testing.T) {
 
 	ghClient := gh.NewClient(nil)
 	ghClient.BaseURL, _ = ghClient.BaseURL.Parse(server.URL + "/")
-	client := &Client{client: ghClient}
+	client := &Client{client: ghClient, apiRequestDelay: 0} // Disable delay for tests
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
@@ -410,7 +410,7 @@ func TestValidateRepoContextCancellation(t *testing.T) {
 
 	ghClient := gh.NewClient(nil)
 	ghClient.BaseURL, _ = ghClient.BaseURL.Parse(server.URL + "/")
-	client := &Client{client: ghClient}
+	client := &Client{client: ghClient, apiRequestDelay: 0} // Disable delay for tests
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately

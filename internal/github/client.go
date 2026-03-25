@@ -13,8 +13,8 @@ import (
 	gh "github.com/google/go-github/v62/github"
 )
 
-// API request delay to avoid secondary rate limits
-const apiRequestDelay = 1 * time.Second
+// Default API request delay to avoid secondary rate limits
+const defaultAPIDelay = 1 * time.Second
 
 // Rate limit retry settings
 const (
@@ -26,7 +26,8 @@ const (
 
 // Client wraps the GitHub API client with retry logic and rate limiting.
 type Client struct {
-	client *gh.Client
+	client        *gh.Client
+	apiRequestDelay time.Duration
 }
 
 // ReleaseInfo represents a simplified release information from GitHub.
@@ -54,7 +55,16 @@ type AssetInfo struct {
 // The token should be a GitHub personal access token with appropriate repository permissions.
 func NewClient(token string) *Client {
 	client := gh.NewClient(nil).WithAuthToken(token)
-	return &Client{client: client}
+	return &Client{
+		client:          client,
+		apiRequestDelay: defaultAPIDelay,
+	}
+}
+
+// SetAPIDelay sets the delay between API requests to avoid secondary rate limits.
+// This is useful for testing or for environments with different rate limit requirements.
+func (c *Client) SetAPIDelay(delay time.Duration) {
+	c.apiRequestDelay = delay
 }
 
 // GetReleaseList fetches all releases for a repository with pagination.
@@ -110,7 +120,7 @@ func (c *Client) fetchReleases(ctx context.Context, owner, repo string) ([]Relea
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(apiRequestDelay):
+		case <-time.After(c.apiRequestDelay):
 		}
 
 		ghReleases, resp, err := c.client.Repositories.ListReleases(ctx, owner, repo, opts)
@@ -144,7 +154,7 @@ func (c *Client) GetLatestRelease(ctx context.Context, owner, repo string) (*Rel
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(apiRequestDelay):
+	case <-time.After(c.apiRequestDelay):
 	}
 
 	r, _, err := c.client.Repositories.GetLatestRelease(ctx, owner, repo)
@@ -206,7 +216,7 @@ func (c *Client) ValidateRepo(ctx context.Context, owner, repo string) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(apiRequestDelay):
+	case <-time.After(c.apiRequestDelay):
 	}
 
 	_, _, err := c.client.Repositories.Get(ctx, owner, repo)
