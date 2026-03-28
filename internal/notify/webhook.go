@@ -3,11 +3,13 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -17,6 +19,13 @@ import (
 
 // DefaultWebhookTimeout is the default timeout for webhook notifications
 const DefaultWebhookTimeout = 10 * time.Second
+
+// Webhook retry settings
+const (
+	webhookInitialDelay = 1 * time.Second
+	webhookMaxDelay     = 30 * time.Second
+	webhookMaxRetries   = 3
+)
 
 // ErrInvalidWebhookURL is returned when webhook URL fails security validation
 var ErrInvalidWebhookURL = errors.New("webhook URL is not allowed: possible SSRF risk")
@@ -84,10 +93,10 @@ func validateWebhookURL(webhookURL string) error {
 
 // WebhookNotifier sends notifications via HTTP webhook with retry support
 type WebhookNotifier struct {
-	url        string
-	client     *http.Client
-	maxRetries int
-	retryDelay time.Duration
+	url          string
+	client       *http.Client
+	maxRetries   int
+	initialDelay time.Duration
 }
 
 // NewWebhookNotifier creates a new webhook notifier with default timeout.
@@ -103,9 +112,9 @@ func NewWebhookNotifierWithTimeout(url string, timeout time.Duration) (*WebhookN
 		return nil, fmt.Errorf("webhook URL validation failed: %w", err)
 	}
 	return &WebhookNotifier{
-		url:        url,
-		maxRetries: 3,
-		retryDelay: 1 * time.Second,
+		url:          url,
+		maxRetries:   webhookMaxRetries,
+		initialDelay: webhookInitialDelay,
 		client: &http.Client{
 			Timeout: timeout,
 		},
@@ -149,7 +158,7 @@ func (n *WebhookNotifier) Send(ctx context.Context, notification *Notification) 
 			lastErr = fmt.Errorf("failed to send webhook: %w", err)
 			if attempt < n.maxRetries {
 				slog.Warn("Webhook send failed, retrying", "attempt", attempt, "error", err)
-				n.wait(ctx)
+				n.wait(ctx, attempt)
 				continue
 			}
 			return lastErr
@@ -165,7 +174,7 @@ func (n *WebhookNotifier) Send(ctx context.Context, notification *Notification) 
 			lastErr = fmt.Errorf("webhook returned status %d", resp.StatusCode)
 			if attempt < n.maxRetries {
 				slog.Warn("Webhook server error, retrying", "attempt", attempt, "status", resp.StatusCode)
-				n.wait(ctx)
+				n.wait(ctx, attempt)
 				continue
 			}
 			return lastErr
@@ -181,10 +190,22 @@ func (n *WebhookNotifier) Send(ctx context.Context, notification *Notification) 
 	return lastErr
 }
 
-// wait pauses before retry, respecting context cancellation
-func (n *WebhookNotifier) wait(ctx context.Context) {
+// wait pauses before retry with exponential backoff and jitter, respecting context cancellation.
+// delay = initialDelay * 2^attempt + random jitter (±25%).
+func (n *WebhookNotifier) wait(ctx context.Context, attempt int) {
+	delay := n.initialDelay * time.Duration(1<<min(attempt, 10)) // cap shift to avoid overflow
+	if delay > webhookMaxDelay {
+		delay = webhookMaxDelay
+	}
+	// Add ±25% jitter
+	jitterRange := delay / 4
+	if jitterRange > 0 {
+		jitterInt, _ := rand.Int(rand.Reader, big.NewInt(int64(jitterRange)*2+1))
+		delay = delay - jitterRange + time.Duration(jitterInt.Int64())
+	}
+
 	select {
 	case <-ctx.Done():
-	case <-time.After(n.retryDelay):
+	case <-time.After(delay):
 	}
 }

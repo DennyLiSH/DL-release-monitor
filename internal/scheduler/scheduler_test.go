@@ -83,7 +83,7 @@ func TestScheduler_New(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 
 	if sched == nil {
 		t.Fatal("Expected non-nil scheduler")
@@ -99,7 +99,7 @@ func TestScheduler_StartStop(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 
 	// Start
 	sched.Start()
@@ -132,7 +132,7 @@ func TestScheduler_RestartAfterStop(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 
 	// Start and stop
 	sched.Start()
@@ -153,7 +153,7 @@ func TestScheduler_CheckNowNotRunning(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 
 	// CheckNow without starting should not panic
 	sched.CheckNow()
@@ -166,7 +166,7 @@ func TestScheduler_CheckRepoNowNotFound(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 	sched.Start()
 	defer sched.Stop()
 
@@ -194,7 +194,7 @@ func TestScheduler_CheckRepoNotRunning(t *testing.T) {
 		t.Fatalf("Failed to create test repo: %v", err)
 	}
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 	// Don't start the scheduler
 
 	// Should return error when not running
@@ -223,7 +223,7 @@ func TestScheduler_ConcurrentCheckPrevention(t *testing.T) {
 		}
 	}
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 	sched.Start()
 
 	// Wait for initial check to complete
@@ -256,7 +256,7 @@ func TestScheduler_GetConfig(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 
 	// getConfig should return a copy
 	gotCfg := sched.getConfig()
@@ -271,7 +271,7 @@ func TestScheduler_ContextCancellation(t *testing.T) {
 	ghClient := github.NewClient("test-token")
 	ghClient.SetAPIDelay(0) // Disable delay for tests
 
-	sched := New(db, ghClient, cfg)
+	sched := New(db, ghClient, config.NewAtomicConfig(cfg))
 	sched.Start()
 
 	// Cancel context and verify Stop works

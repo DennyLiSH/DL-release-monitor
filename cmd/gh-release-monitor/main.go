@@ -63,13 +63,16 @@ func main() {
 	ghClient := github.NewClient(cfg.GitHub.Token)
 	ghClient.SetAPIDelay(time.Duration(cfg.GitHub.APIDelay) * time.Millisecond)
 
+	// Create atomic config holder for thread-safe config sharing
+	cfgHolder := config.NewAtomicConfig(cfg)
+
 	// Create scheduler
-	sched := scheduler.New(db, ghClient, cfg)
+	sched := scheduler.New(db, ghClient, cfgHolder)
 	sched.Start()
 	defer sched.Stop()
 
 	// Setup API routes
-	router := api.NewRouter(db, ghClient, sched, cfg)
+	router := api.NewRouter(db, ghClient, sched, cfgHolder)
 
 	// Create HTTP server
 	srv := &http.Server{

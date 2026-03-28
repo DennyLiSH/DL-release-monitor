@@ -5,7 +5,8 @@ package storage
 import (
 	"fmt"
 	"path/filepath"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 // availableSpace returns available disk space on Unix-like systems
@@ -15,8 +16,8 @@ func availableSpace(basePath string) (uint64, error) {
 		return 0, fmt.Errorf("failed to get base path: %w", err)
 	}
 
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(absBase, &stat); err != nil {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(absBase, &stat); err != nil {
 		return 0, fmt.Errorf("failed to get disk stats: %w", err)
 	}
 

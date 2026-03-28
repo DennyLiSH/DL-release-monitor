@@ -65,9 +65,10 @@ func setupTestRouter(t *testing.T, db *gorm.DB) *Router {
 	}
 
 	ghClient := github.NewClient("test-token")
-	sched := scheduler.New(db, ghClient, cfg)
+	cfgHolder := config.NewAtomicConfig(cfg)
+	sched := scheduler.New(db, ghClient, cfgHolder)
 
-	return NewRouter(db, ghClient, sched, cfg)
+	return NewRouter(db, ghClient, sched, cfgHolder)
 }
 
 func TestParsePagination(t *testing.T) {

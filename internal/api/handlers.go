@@ -35,14 +35,16 @@ func (r *Router) ListRepos(w http.ResponseWriter, req *http.Request) {
 
 	var repos []models.Repo
 	if err := r.db.Order("created_at DESC").Offset(offset).Limit(limit).Find(&repos).Error; err != nil {
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("Failed to list repos", "error", err)
+		r.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
 	// Get total count for pagination
 	var total int64
 	if err := r.db.Model(&models.Repo{}).Count(&total).Error; err != nil {
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("Failed to count repos", "error", err)
+		r.writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -103,7 +105,8 @@ func (r *Router) CreateRepo(w http.ResponseWriter, req *http.Request) {
 	// Validate repo exists on GitHub
 	ctx := req.Context()
 	if err := r.ghClient.ValidateRepo(ctx, owner, name); err != nil {
-		r.writeError(w, http.StatusBadRequest, "Repository not accessible: "+err.Error())
+		slog.Error("Repository not accessible", "error", err)
+		r.writeError(w, http.StatusBadRequest, "Repository not accessible")
 		return
 	}
 
@@ -122,7 +125,7 @@ func (r *Router) CreateRepo(w http.ResponseWriter, req *http.Request) {
 			r.writeError(w, http.StatusConflict, "Repository already exists")
 			return
 		}
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to create repo", err)
 		return
 	}
 
@@ -143,13 +146,13 @@ func (r *Router) GetRepo(w http.ResponseWriter, req *http.Request) {
 			r.writeError(w, http.StatusNotFound, "Repository not found")
 			return
 		}
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to fetch repo", err)
 		return
 	}
 
 	// Load releases
 	if err := r.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Limit(defaultReleaseLimit).Find(&repo.Releases).Error; err != nil {
-		r.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to load releases: %v", err))
+		r.writeInternalError(w, "failed to load releases", err)
 		return
 	}
 
@@ -170,7 +173,7 @@ func (r *Router) UpdateRepo(w http.ResponseWriter, req *http.Request) {
 			r.writeError(w, http.StatusNotFound, "Repository not found")
 			return
 		}
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to fetch repo", err)
 		return
 	}
 
@@ -198,12 +201,12 @@ func (r *Router) UpdateRepo(w http.ResponseWriter, req *http.Request) {
 
 	if len(updates) > 0 {
 		if err := r.db.Model(&repo).Updates(updates).Error; err != nil {
-			r.writeError(w, http.StatusInternalServerError, err.Error())
+			r.writeInternalError(w, "failed to update repo", err)
 			return
 		}
 		// Re-fetch to get updated data (Updates with map doesn't refresh the struct)
 		if err := r.db.First(&repo, id).Error; err != nil {
-			r.writeError(w, http.StatusInternalServerError, err.Error())
+			r.writeInternalError(w, "failed to re-fetch repo", err)
 			return
 		}
 	}
@@ -225,7 +228,7 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 			r.writeError(w, http.StatusNotFound, "Repository not found")
 			return
 		}
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to fetch repo", err)
 		return
 	}
 
@@ -257,7 +260,7 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 	})
 
 	if err != nil {
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to delete repo", err)
 		return
 	}
 
@@ -274,7 +277,7 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 		ctx, cancel := context.WithTimeout(context.Background(), defaultDeleteTimeout)
 		defer cancel()
 
-		storageBackend, err := storage.NewLocalStorage(r.cfg.Storage.Local.Path)
+		storageBackend, err := storage.NewLocalStorage(r.cfgHolder.Load().Storage.Local.Path)
 		if err != nil {
 			slog.Error("Failed to initialize storage for cleanup", "error", err)
 			return
@@ -306,7 +309,7 @@ func (r *Router) ListReleases(w http.ResponseWriter, req *http.Request) {
 
 	var releases []models.Release
 	if err := query.Limit(maxReleaseLimit).Find(&releases).Error; err != nil {
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to list releases", err)
 		return
 	}
 
@@ -317,7 +320,7 @@ func (r *Router) ListReleases(w http.ResponseWriter, req *http.Request) {
 func (r *Router) ListDownloads(w http.ResponseWriter, req *http.Request) {
 	var logs []models.DownloadLog
 	if err := r.db.Order("created_at DESC").Limit(maxReleaseLimit).Find(&logs).Error; err != nil {
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to list downloads", err)
 		return
 	}
 	r.writeJSON(w, http.StatusOK, logs)
@@ -343,7 +346,7 @@ func (r *Router) TriggerRepoCheck(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 		// Return the actual error for other cases (e.g., initialization failure)
-		r.writeError(w, http.StatusInternalServerError, err.Error())
+		r.writeInternalError(w, "failed to trigger repo check", err)
 		return
 	}
 
@@ -352,35 +355,34 @@ func (r *Router) TriggerRepoCheck(w http.ResponseWriter, req *http.Request) {
 
 // GetConfig returns current configuration
 func (r *Router) GetConfig(w http.ResponseWriter, req *http.Request) {
-	r.cfgMu.RLock()
-	defer r.cfgMu.RUnlock()
+	cur := r.cfgHolder.Load()
 
 	// Return sanitized config (no secrets)
 	cfg := map[string]any{
 		"server": map[string]any{
-			"port":         r.cfg.Server.Port,
-			"base_url":     r.cfg.Server.BaseURL,
-			"auth_enabled": r.cfg.Server.AuthKey != "",
+			"port":         cur.Server.Port,
+			"base_url":     cur.Server.BaseURL,
+			"auth_enabled": cur.Server.AuthKey != "",
 		},
 		"github": map[string]any{
-			"poll_interval": r.cfg.GitHub.PollInterval,
+			"poll_interval": cur.GitHub.PollInterval,
 		},
 		"storage": map[string]any{
 			"local": map[string]any{
-				"enabled": r.cfg.Storage.Local.Enabled,
-				"path":    r.cfg.Storage.Local.Path,
+				"enabled": cur.Storage.Local.Enabled,
+				"path":    cur.Storage.Local.Path,
 			},
 		},
 		"retention": map[string]any{
-			"max_versions":    r.cfg.Retention.MaxVersions,
-			"keep_last_major": r.cfg.Retention.KeepLastMajor,
+			"max_versions":    cur.Retention.MaxVersions,
+			"keep_last_major": cur.Retention.KeepLastMajor,
 		},
 		"notify": map[string]any{
 			"email": map[string]any{
-				"enabled": r.cfg.Notify.Email.Enabled,
+				"enabled": cur.Notify.Email.Enabled,
 			},
 			"webhook": map[string]any{
-				"enabled": r.cfg.Notify.Webhook.Enabled,
+				"enabled": cur.Notify.Webhook.Enabled,
 			},
 		},
 	}
@@ -404,18 +406,24 @@ func (r *Router) UpdateConfig(w http.ResponseWriter, req *http.Request) {
 	r.cfgMu.Lock()
 	defer r.cfgMu.Unlock()
 
+	// Copy-on-write: load current, create modified copy, store atomically
+	cur := r.cfgHolder.Load()
+	newCfg := *cur
+
 	if input.Retention != nil {
 		if input.Retention.MaxVersions != nil {
 			if *input.Retention.MaxVersions < 1 {
 				r.writeError(w, http.StatusBadRequest, "max_versions must be >= 1")
 				return
 			}
-			r.cfg.Retention.MaxVersions = *input.Retention.MaxVersions
+			newCfg.Retention.MaxVersions = *input.Retention.MaxVersions
 		}
 		if input.Retention.KeepLastMajor != nil {
-			r.cfg.Retention.KeepLastMajor = *input.Retention.KeepLastMajor
+			newCfg.Retention.KeepLastMajor = *input.Retention.KeepLastMajor
 		}
 	}
+
+	r.cfgHolder.Store(&newCfg)
 
 	r.writeJSON(w, http.StatusOK, map[string]string{"message": "Config updated"})
 }
@@ -521,6 +529,13 @@ func (r *Router) writeJSON(w http.ResponseWriter, status int, data any) {
 // writeError writes error response
 func (r *Router) writeError(w http.ResponseWriter, status int, message string) {
 	r.writeJSON(w, status, map[string]string{"error": message})
+}
+
+// writeInternalError logs the error and returns a generic message to the client.
+// This prevents leaking internal details (DB driver info, file paths, etc.)
+func (r *Router) writeInternalError(w http.ResponseWriter, message string, err error) {
+	slog.Error(message, "error", err)
+	r.writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 // isUniqueConstraintError checks if the error is a unique constraint violation

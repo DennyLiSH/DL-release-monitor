@@ -22,7 +22,7 @@ import (
 type Scheduler struct {
 	db          *gorm.DB
 	ghClient    github.ClientInterface
-	cfg         *config.Config
+	cfgHolder   *config.AtomicConfig
 	storage     storage.Storage // Use interface for flexibility
 	notifyMgr   *notify.Manager
 	parser      *release.Parser
@@ -37,14 +37,14 @@ type Scheduler struct {
 }
 
 // New creates a new scheduler
-func New(db *gorm.DB, ghClient github.ClientInterface, cfg *config.Config) *Scheduler {
+func New(db *gorm.DB, ghClient github.ClientInterface, cfgHolder *config.AtomicConfig) *Scheduler {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		db:       db,
-		ghClient: ghClient,
-		cfg:      cfg,
-		ctx:      ctx,
-		cancel:   cancel,
+		db:        db,
+		ghClient:  ghClient,
+		cfgHolder: cfgHolder,
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
@@ -58,11 +58,11 @@ func (s *Scheduler) ensureInit() error {
 	}
 
 	// Access cfg directly since we already hold the lock (getConfig would deadlock)
-	cfg := *s.cfg
+	cfg := *s.cfgHolder.Load()
 
 	// Initialize storage
 	var err error
-	s.storage, err = storage.NewLocalStorageWithTimeout(cfg.Storage.Local.Path, cfg.Storage.Local.DownloadTimeout)
+	s.storage, err = storage.NewLocalStorageWithConfig(cfg.Storage.Local.Path, cfg.Storage.Local.DownloadTimeout, cfg.Storage.Local.MaxFileSize)
 	if err != nil {
 		s.initErr = fmt.Errorf("failed to initialize storage: %w", err)
 		return s.initErr
@@ -246,7 +246,7 @@ func (s *Scheduler) checkAllRepos() {
 	}()
 
 	var repos []models.Repo
-	if err := s.db.Where("enabled = ?", true).Find(&repos).Error; err != nil {
+	if err := s.db.WithContext(s.getContext()).Where("enabled = ?", true).Find(&repos).Error; err != nil {
 		slog.Error("Failed to fetch repos", "error", err)
 		return
 	}
@@ -307,7 +307,7 @@ func (s *Scheduler) checkRepo(repo *models.Repo) {
 	}
 
 	// Apply retention policy
-	s.applyRetentionPolicy(repo)
+	s.applyRetentionPolicy(ctx, repo)
 }
 
 // processRelease processes a single GitHub release, returns true if it was newly processed
@@ -414,14 +414,14 @@ func (s *Scheduler) sendNotification(ctx context.Context, repo *models.Repo, rel
 // downloadAsset downloads a single asset
 func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *models.Release, asset *models.Asset) {
 	// Mark as downloading
-	if err := s.db.Model(asset).Update("status", models.AssetStatusDownloading).Error; err != nil {
+	if err := s.db.WithContext(ctx).Model(asset).Update("status", models.AssetStatusDownloading).Error; err != nil {
 		slog.Error("Failed to update asset status to downloading", "repo", repo.FullName, "error", err)
 	}
 
 	// Use provided context for cancellation support
 	localPath, sha256sum, duration, err := s.storage.Download(ctx, asset.DownloadURL, repo.FullName, asset.Name)
 	if err != nil {
-		if err := s.db.Model(asset).Updates(map[string]any{
+		if err := s.db.WithContext(ctx).Model(asset).Updates(map[string]any{
 			"status":        models.AssetStatusFailed,
 			"error_message": err.Error(),
 		}).Error; err != nil {
@@ -430,7 +430,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 		slog.Error("Failed to download asset", "repo", repo.FullName, "asset", asset.Name, "error", err)
 
 		// Log failure
-		if err := s.db.Create(&models.DownloadLog{
+		if err := s.db.WithContext(ctx).Create(&models.DownloadLog{
 			AssetID:  asset.ID,
 			RepoName: repo.FullName,
 			Version:  rel.Version,
@@ -446,7 +446,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 	}
 
 	// Update asset record
-	if err := s.db.Model(asset).Updates(map[string]any{
+	if err := s.db.WithContext(ctx).Model(asset).Updates(map[string]any{
 		"local_path": localPath,
 		"sha256":     sha256sum,
 		"status":     models.AssetStatusDone,
@@ -455,7 +455,7 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 	}
 
 	// Log success
-	if err := s.db.Create(&models.DownloadLog{
+	if err := s.db.WithContext(ctx).Create(&models.DownloadLog{
 		AssetID:  asset.ID,
 		RepoName: repo.FullName,
 		Version:  rel.Version,
@@ -470,15 +470,13 @@ func (s *Scheduler) downloadAsset(ctx context.Context, repo *models.Repo, rel *m
 	slog.Info("Downloaded asset", "repo", repo.FullName, "asset", asset.Name, "duration_ms", duration)
 }
 
-// getConfig returns a copy of the current config under read lock
+// getConfig returns a copy of the current config
 func (s *Scheduler) getConfig() config.Config {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return *s.cfg
+	return *s.cfgHolder.Load()
 }
 
 // applyRetentionPolicy applies retention policy for a repo
-func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
+func (s *Scheduler) applyRetentionPolicy(ctx context.Context, repo *models.Repo) {
 	// Get effective retention settings
 	cfg := s.getConfig()
 	maxVersions := cfg.GetRetention(repo.Retention)
@@ -486,7 +484,7 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 
 	// Get all releases for this repo
 	var releases []models.Release
-	if err := s.db.Where("repo_id = ?", repo.ID).Order("published_at DESC").Find(&releases).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("repo_id = ?", repo.ID).Order("published_at DESC").Find(&releases).Error; err != nil {
 		slog.Error("Failed to fetch releases for retention", "repo", repo.FullName, "error", err)
 		return
 	}
@@ -497,7 +495,7 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 
 	// Get all assets for this repo
 	var assets []models.Asset
-	if err := s.db.Joins("JOIN releases ON releases.id = assets.release_id").
+	if err := s.db.WithContext(ctx).Joins("JOIN releases ON releases.id = assets.release_id").
 		Where("releases.repo_id = ?", repo.ID).
 		Find(&assets).Error; err != nil {
 		slog.Error("Failed to fetch assets for retention", "repo", repo.FullName, "error", err)
@@ -517,7 +515,7 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 				slog.Info("Deleted asset (retention policy)", "repo", repo.FullName, "asset", asset.Name)
 			}
 		}
-		if err := s.db.Delete(&asset).Error; err != nil {
+		if err := s.db.WithContext(ctx).Delete(&asset).Error; err != nil {
 			slog.Error("Failed to delete asset record", "repo", repo.FullName, "error", err)
 		}
 	}
@@ -529,7 +527,7 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 		for _, asset := range toDelete {
 			deletedReleaseIDs = append(deletedReleaseIDs, asset.ReleaseID)
 		}
-		if err := s.db.Where("repo_id = ? AND id IN ?", repo.ID, deletedReleaseIDs).
+		if err := s.db.WithContext(ctx).Where("repo_id = ? AND id IN ?", repo.ID, deletedReleaseIDs).
 			Where("id NOT IN (SELECT DISTINCT release_id FROM assets)").Delete(&models.Release{}).Error; err != nil {
 			slog.Error("Failed to delete orphan releases", "repo", repo.FullName, "error", err)
 		}

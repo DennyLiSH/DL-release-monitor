@@ -15,11 +15,15 @@ import (
 	"time"
 )
 
+// defaultMaxFileSize is the default maximum file size for downloads (1 GB)
+const defaultMaxFileSize int64 = 1 << 30
+
 // LocalStorage implements the Storage interface for local filesystem operations.
 // It provides thread-safe file download, deletion, and management capabilities.
 type LocalStorage struct {
 	basePath       string
 	downloadClient *http.Client
+	maxFileSize    int64
 }
 
 // NewLocalStorage creates a new local storage
@@ -29,13 +33,26 @@ func NewLocalStorage(basePath string) (*LocalStorage, error) {
 
 // NewLocalStorageWithTimeout creates a new local storage with custom download timeout
 func NewLocalStorageWithTimeout(basePath string, timeout time.Duration) (*LocalStorage, error) {
+	return newLocalStorage(basePath, timeout, defaultMaxFileSize)
+}
+
+// NewLocalStorageWithConfig creates a new local storage with full configuration
+func NewLocalStorageWithConfig(basePath string, timeout time.Duration, maxFileSize int64) (*LocalStorage, error) {
+	if maxFileSize <= 0 {
+		maxFileSize = defaultMaxFileSize
+	}
+	return newLocalStorage(basePath, timeout, maxFileSize)
+}
+
+func newLocalStorage(basePath string, timeout time.Duration, maxFileSize int64) (*LocalStorage, error) {
 	// Ensure base directory exists
 	if err := os.MkdirAll(basePath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
 
 	return &LocalStorage{
-		basePath: basePath,
+		basePath:    basePath,
+		maxFileSize: maxFileSize,
 		downloadClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -94,11 +111,13 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 		return "", "", 0, fmt.Errorf("failed to create temp file: %w", err)
 	}
 
-	// Calculate SHA256 while downloading
+	// Calculate SHA256 while downloading, with size limit
 	hash := sha256.New()
 	writer := io.MultiWriter(out, hash)
 
-	_, err = io.Copy(writer, resp.Body)
+	// Limit read to maxFileSize+1 to detect oversized files
+	limited := io.LimitReader(resp.Body, s.maxFileSize+1)
+	written, err := io.Copy(writer, limited)
 	if err != nil {
 		out.Close()
 		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
@@ -108,6 +127,15 @@ func (s *LocalStorage) Download(ctx context.Context, url, repoName, filename str
 			return "", "", 0, fmt.Errorf("download canceled during write: %w", err)
 		}
 		return "", "", 0, fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Check if file exceeded size limit
+	if written >= s.maxFileSize+1 {
+		out.Close()
+		if removeErr := os.Remove(tmpPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			slog.Warn("Failed to remove temp file", "path", tmpPath, "error", removeErr)
+		}
+		return "", "", 0, fmt.Errorf("file exceeds maximum size limit (%d bytes)", s.maxFileSize)
 	}
 
 	// Close file before renaming
@@ -138,22 +166,13 @@ func (s *LocalStorage) Delete(localPath string) error {
 		return nil
 	}
 
-	// Security check: ensure path is within base directory
-	absPath, err := filepath.Abs(localPath)
+	// Security check: ensure resolved path is within base directory
+	resolvedPath, err := s.resolveAndValidatePath(localPath)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path: %w", err)
+		return err
 	}
 
-	absBase, err := filepath.Abs(s.basePath)
-	if err != nil {
-		return fmt.Errorf("failed to get base path: %w", err)
-	}
-
-	if absPath != absBase && !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) {
-		return fmt.Errorf("path outside storage directory")
-	}
-
-	return os.Remove(localPath)
+	return os.Remove(resolvedPath)
 }
 
 // Exists checks if a file exists
@@ -161,17 +180,55 @@ func (s *LocalStorage) Exists(localPath string) bool {
 	if localPath == "" {
 		return false
 	}
-	_, err := os.Stat(localPath)
+	resolvedPath, err := s.resolveAndValidatePath(localPath)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(resolvedPath)
 	return err == nil
 }
 
 // Size returns the size of a file
 func (s *LocalStorage) Size(localPath string) (int64, error) {
-	info, err := os.Stat(localPath)
+	resolvedPath, err := s.resolveAndValidatePath(localPath)
+	if err != nil {
+		return 0, err
+	}
+	info, err := os.Stat(resolvedPath)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get file size: %w", err)
 	}
 	return info.Size(), nil
+}
+
+// resolveAndValidatePath resolves symlinks and validates the path is within basePath.
+func (s *LocalStorage) resolveAndValidatePath(localPath string) (string, error) {
+	absPath, err := filepath.Abs(localPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+
+	absBase, err := filepath.Abs(s.basePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get base path: %w", err)
+	}
+
+	// Resolve symlinks to prevent path traversal via symlinks
+	// EvalSymlinks fails for non-existent paths, fall back to Abs
+	evaluatedPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		evaluatedPath = absPath
+	}
+	evaluatedBase, err := filepath.EvalSymlinks(absBase)
+	if err != nil {
+		evaluatedBase = absBase
+	}
+
+	if evaluatedPath != evaluatedBase && !strings.HasPrefix(evaluatedPath, evaluatedBase+string(filepath.Separator)) {
+		return "", fmt.Errorf("path outside storage directory")
+	}
+
+	return absPath, nil
 }
 
 // DiskUsage returns the total disk usage of the storage

@@ -16,6 +16,31 @@ var (
 	semverRegex = regexp.MustCompile(`^(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-+].*)?$`)
 	// versionPartRegex matches numeric parts for version comparison
 	versionPartRegex = regexp.MustCompile(`(\d+)`)
+
+	// installerExts maps file extensions to identify installer assets (package-level for reuse)
+	installerExts = map[string]bool{
+		".exe": true,
+		".msi": true,
+		".dmg": true,
+		".pkg": true,
+		".deb": true,
+		".rpm": true,
+		".apk": true,
+	}
+
+	// portableExts maps file extensions to identify portable/archive assets (package-level for reuse)
+	portableExts = map[string]bool{
+		".zip":      true,
+		".tar":      true,
+		".tar.gz":   true,
+		".tgz":      true,
+		".tar.bz2":  true,
+		".tbz2":     true,
+		".tar.xz":   true,
+		".txz":      true,
+		".7z":       true,
+		".appimage": true,
+	}
 )
 
 // Parser handles release parsing

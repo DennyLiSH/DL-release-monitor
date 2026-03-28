@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -47,6 +48,7 @@ type LocalStorageConfig struct {
 	Enabled         bool          `yaml:"enabled"`
 	Path            string        `yaml:"path"`
 	DownloadTimeout time.Duration `yaml:"download_timeout"` // download timeout (default: 10m)
+	MaxFileSize     int64         `yaml:"max_file_size"`    // max download size in bytes (0 = no limit, default: 1GB)
 }
 
 // RetentionConfig holds retention policy configuration
@@ -137,6 +139,9 @@ func setDefaults(cfg *Config) {
 	if cfg.Storage.Local.DownloadTimeout == 0 {
 		cfg.Storage.Local.DownloadTimeout = 10 * time.Minute
 	}
+	if cfg.Storage.Local.MaxFileSize == 0 {
+		cfg.Storage.Local.MaxFileSize = 1 << 30 // 1 GB default
+	}
 	if cfg.Retention.MaxVersions == 0 {
 		cfg.Retention.MaxVersions = 5
 	}
@@ -213,4 +218,28 @@ func ParseRepoFullName(fullName string) (owner, repo string, err error) {
 		return "", "", fmt.Errorf("invalid repo format, owner and repo must be non-empty: %s", fullName)
 	}
 	return parts[0], parts[1], nil
+}
+
+// AtomicConfig provides thread-safe atomic access to a Config pointer
+// using copy-on-write semantics. Readers always get a consistent snapshot.
+type AtomicConfig struct {
+	ptr atomic.Pointer[Config]
+}
+
+// NewAtomicConfig creates a new AtomicConfig wrapping the given Config.
+func NewAtomicConfig(cfg *Config) *AtomicConfig {
+	ac := &AtomicConfig{}
+	ac.ptr.Store(cfg)
+	return ac
+}
+
+// Load atomically returns the current Config pointer.
+func (ac *AtomicConfig) Load() *Config {
+	return ac.ptr.Load()
+}
+
+// Store atomically replaces the Config pointer.
+// Callers should create a copy, modify it, then Store the new pointer.
+func (ac *AtomicConfig) Store(cfg *Config) {
+	ac.ptr.Store(cfg)
 }

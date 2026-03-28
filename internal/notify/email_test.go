@@ -77,7 +77,7 @@ func TestWebhookNotifier_Send(t *testing.T) {
 	notifier := &WebhookNotifier{
 		url:        server.URL,
 		maxRetries: 3,
-		retryDelay: 1 * time.Second,
+		initialDelay: 1 * time.Second,
 		client:     &http.Client{Timeout: 5 * time.Second},
 	}
 
@@ -111,7 +111,7 @@ func TestWebhookNotifier_SendWithRetry(t *testing.T) {
 	notifier := &WebhookNotifier{
 		url:        server.URL,
 		maxRetries: 3,
-		retryDelay: 10 * time.Millisecond,
+		initialDelay: 10 * time.Millisecond,
 		client:     &http.Client{Timeout: 5 * time.Second},
 	}
 
@@ -142,7 +142,7 @@ func TestWebhookNotifier_ContextCancellation(t *testing.T) {
 	notifier := &WebhookNotifier{
 		url:        server.URL,
 		maxRetries: 3,
-		retryDelay: 10 * time.Millisecond,
+		initialDelay: 10 * time.Millisecond,
 		client:     &http.Client{Timeout: 5 * time.Second},
 	}
 

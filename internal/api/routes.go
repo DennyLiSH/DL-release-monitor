@@ -20,21 +20,23 @@ type Router struct {
 	db        *gorm.DB
 	ghClient  github.ClientInterface
 	sched     *scheduler.Scheduler
-	cfg       *config.Config
-	cfgMu     sync.RWMutex // protects cfg access
+	cfgHolder *config.AtomicConfig
+	cfgMu     sync.Mutex // serializes config updates (reads are lock-free via atomic)
 	startTime time.Time
 }
 
 // NewRouter creates a new API router
-func NewRouter(db *gorm.DB, ghClient github.ClientInterface, sched *scheduler.Scheduler, cfg *config.Config) *Router {
+func NewRouter(db *gorm.DB, ghClient github.ClientInterface, sched *scheduler.Scheduler, cfgHolder *config.AtomicConfig) *Router {
 	r := chi.NewRouter()
+
+	cfg := cfgHolder.Load()
 
 	router := &Router{
 		Mux:       r,
 		db:        db,
 		ghClient:  ghClient,
 		sched:     sched,
-		cfg:       cfg,
+		cfgHolder: cfgHolder,
 		startTime: time.Now(),
 	}
 
