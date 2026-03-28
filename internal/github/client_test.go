@@ -106,9 +106,19 @@ func TestIsRetryableError(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "EOF error",
+			name: "unexpected EOF error",
 			err:  errors.New("unexpected EOF"),
 			want: true,
+		},
+		{
+			name: "bare EOF error",
+			err:  errors.New("EOF"),
+			want: true,
+		},
+		{
+			name: "EOF in unrelated message",
+			err:  errors.New("failed to process EOF marker"),
+			want: false,
 		},
 		{
 			name: "generic error",
@@ -127,34 +137,27 @@ func TestIsRetryableError(t *testing.T) {
 }
 
 func TestIsRetryableErrorNetError(t *testing.T) {
-	// Test net.Error timeout
-	timeoutErr := &testNetError{timeout: true, temporary: true}
+	// Test net.Error timeout - retryable
+	timeoutErr := &testNetError{timeout: true}
 	if got := isRetryableError(timeoutErr); !got {
 		t.Errorf("isRetryableError() for timeout net.Error = %v, want true", got)
 	}
 
-	// Test net.Error temporary
-	tempErr := &testNetError{timeout: false, temporary: true}
-	if got := isRetryableError(tempErr); !got {
-		t.Errorf("isRetryableError() for temporary net.Error = %v, want true", got)
-	}
-
-	// Test net.Error neither
-	permErr := &testNetError{timeout: false, temporary: false}
-	if got := isRetryableError(permErr); got {
-		t.Errorf("isRetryableError() for permanent net.Error = %v, want false", got)
+	// Test net.Error non-timeout - not retryable (Temporary() is deprecated)
+	nonTimeoutErr := &testNetError{timeout: false}
+	if got := isRetryableError(nonTimeoutErr); got {
+		t.Errorf("isRetryableError() for non-timeout net.Error = %v, want false", got)
 	}
 }
 
 // testNetError is a mock net.Error for testing
 type testNetError struct {
-	timeout   bool
-	temporary bool
+	timeout bool
 }
 
 func (e *testNetError) Error() string   { return "test net error" }
 func (e *testNetError) Timeout() bool   { return e.timeout }
-func (e *testNetError) Temporary() bool { return e.temporary }
+func (e *testNetError) Temporary() bool { return false } // Deprecated, not used
 
 func TestBuildAssets(t *testing.T) {
 	tests := []struct {

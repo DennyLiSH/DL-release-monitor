@@ -197,10 +197,10 @@ func TestScheduler_CheckRepoNotRunning(t *testing.T) {
 	sched := New(db, ghClient, cfg)
 	// Don't start the scheduler
 
-	// Should return nil when not running (per implementation)
+	// Should return error when not running
 	err := sched.CheckRepoNow(repo.ID)
-	if err != nil {
-		t.Errorf("Expected nil when scheduler not running, got: %v", err)
+	if err == nil {
+		t.Error("Expected error when scheduler not running")
 	}
 }
 

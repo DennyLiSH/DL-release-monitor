@@ -1,7 +1,7 @@
 package release
 
 import (
-	"log"
+	"log/slog"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -54,18 +54,18 @@ func (p *Parser) ParseVersion(tagName string) (version string, major, minor, pat
 	var err error
 	major, err = strconv.Atoi(matches[1])
 	if err != nil {
-		log.Printf("Warning: unexpected parse error for major version %q: %v", matches[1], err)
+		slog.Warn("unexpected parse error for major version", "value", matches[1], "error", err)
 	}
 	if matches[2] != "" {
 		minor, err = strconv.Atoi(matches[2])
 		if err != nil {
-			log.Printf("Warning: unexpected parse error for minor version %q: %v", matches[2], err)
+			slog.Warn("unexpected parse error for minor version", "value", matches[2], "error", err)
 		}
 	}
 	if matches[3] != "" {
 		patch, err = strconv.Atoi(matches[3])
 		if err != nil {
-			log.Printf("Warning: unexpected parse error for patch version %q: %v", matches[3], err)
+			slog.Warn("unexpected parse error for patch version", "value", matches[3], "error", err)
 		}
 	}
 
@@ -169,13 +169,13 @@ func CompareVersions(v1, v2 string) int {
 		if i < len(v1Parts) {
 			n1, err = strconv.Atoi(v1Parts[i])
 			if err != nil {
-				log.Printf("Warning: version parse error for %q: %v", v1Parts[i], err)
+				slog.Warn("version parse error", "value", v1Parts[i], "error", err)
 			}
 		}
 		if i < len(v2Parts) {
 			n2, err = strconv.Atoi(v2Parts[i])
 			if err != nil {
-				log.Printf("Warning: version parse error for %q: %v", v2Parts[i], err)
+				slog.Warn("version parse error", "value", v2Parts[i], "error", err)
 			}
 		}
 

@@ -149,7 +149,7 @@ func (s *LocalStorage) Delete(localPath string) error {
 		return fmt.Errorf("failed to get base path: %w", err)
 	}
 
-	if !strings.HasPrefix(absPath, absBase) {
+	if absPath != absBase && !strings.HasPrefix(absPath, absBase+string(filepath.Separator)) {
 		return fmt.Errorf("path outside storage directory")
 	}
 

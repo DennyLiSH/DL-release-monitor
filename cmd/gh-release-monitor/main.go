@@ -18,14 +18,6 @@ import (
 	"gh-release-monitor/internal/scheduler"
 )
 
-// getEnvOrDefault returns the value of the environment variable or the default value
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
 func main() {
 	// Initialize structured logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -34,7 +26,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Parse command line flags
-	configPath := flag.String("config", getEnvOrDefault("CONFIG_PATH", "config.yaml"), "path to config file")
+	configPath := flag.String("config", "config.yaml", "path to config file")
 	flag.Parse()
 
 	// Load configuration

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -92,8 +92,8 @@ func (c *Client) GetReleaseList(ctx context.Context, owner, repo string) ([]Rele
 			return nil, fmt.Errorf("failed to fetch releases for %s/%s: %w", owner, repo, err)
 		}
 
-		log.Printf("Retryable error for %s/%s, waiting %v before retry %d/%d: %v",
-			owner, repo, backoff, retries+1, maxRetries, err)
+		slog.Warn("Retryable error, retrying",
+			"owner", owner, "repo", repo, "backoff", backoff, "attempt", retries+1, "max_retries", maxRetries, "error", err)
 
 		select {
 		case <-ctx.Done():
@@ -240,7 +240,7 @@ func isRetryableError(err error) bool {
 	// Check for network errors (timeout, temporary, connection refused)
 	var netErr net.Error
 	if errors.As(err, &netErr) {
-		return netErr.Timeout() || netErr.Temporary()
+		return netErr.Timeout()
 	}
 
 	// Check for GitHub API rate limit response
@@ -262,7 +262,8 @@ func isRetryableError(err error) bool {
 	// Check for connection errors
 	if strings.Contains(err.Error(), "connection refused") ||
 		strings.Contains(err.Error(), "connection reset") ||
-		strings.Contains(err.Error(), "EOF") {
+		err.Error() == "EOF" ||
+		strings.Contains(err.Error(), "unexpected EOF") {
 		return true
 	}
 

@@ -57,7 +57,8 @@ func (s *Scheduler) ensureInit() error {
 		return s.initErr
 	}
 
-	cfg := s.getConfig()
+	// Access cfg directly since we already hold the lock (getConfig would deadlock)
+	cfg := *s.cfg
 
 	// Initialize storage
 	var err error
@@ -210,7 +211,7 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
-		return nil
+		return fmt.Errorf("scheduler is not running")
 	}
 	s.wg.Add(1) // Add to WaitGroup while holding lock to prevent race
 	s.mu.Unlock()
@@ -218,8 +219,8 @@ func (s *Scheduler) CheckRepoNow(repoID int64) error {
 	go func() {
 		defer s.wg.Done()
 		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("Panic recovered in CheckRepoNow", "panic", r)
+			if rec := recover(); rec != nil {
+				slog.Error("Panic recovered in CheckRepoNow", "panic", rec)
 			}
 		}()
 		s.checkRepo(&repo)
@@ -521,8 +522,16 @@ func (s *Scheduler) applyRetentionPolicy(repo *models.Repo) {
 		}
 	}
 
-	// Delete releases with no assets
-	if err := s.db.Where("repo_id = ? AND id NOT IN (SELECT DISTINCT release_id FROM assets)", repo.ID).Delete(&models.Release{}).Error; err != nil {
-		slog.Error("Failed to delete orphan releases", "repo", repo.FullName, "error", err)
+	// Delete releases whose assets were all removed by retention policy.
+	// Only delete releases that had assets which were deleted above, not releases that never had assets.
+	if len(toDelete) > 0 {
+		var deletedReleaseIDs []int64
+		for _, asset := range toDelete {
+			deletedReleaseIDs = append(deletedReleaseIDs, asset.ReleaseID)
+		}
+		if err := s.db.Where("repo_id = ? AND id IN ?", repo.ID, deletedReleaseIDs).
+			Where("id NOT IN (SELECT DISTINCT release_id FROM assets)").Delete(&models.Release{}).Error; err != nil {
+			slog.Error("Failed to delete orphan releases", "repo", repo.FullName, "error", err)
+		}
 	}
 }

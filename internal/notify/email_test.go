@@ -74,9 +74,11 @@ func TestWebhookNotifier_Send(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notifier, err := NewWebhookNotifierWithTimeout(server.URL, 5*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to create webhook notifier: %v", err)
+	notifier := &WebhookNotifier{
+		url:        server.URL,
+		maxRetries: 3,
+		retryDelay: 1 * time.Second,
+		client:     &http.Client{Timeout: 5 * time.Second},
 	}
 
 	notification := &Notification{
@@ -86,7 +88,7 @@ func TestWebhookNotifier_Send(t *testing.T) {
 		HTMLURL:    "https://github.com/owner/repo/releases/tag/v1.0.0",
 	}
 
-	err = notifier.Send(context.Background(), notification)
+	err := notifier.Send(context.Background(), notification)
 	if err != nil {
 		t.Errorf("Send() error = %v", err)
 	}
@@ -106,9 +108,11 @@ func TestWebhookNotifier_SendWithRetry(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notifier, err := NewWebhookNotifierWithTimeout(server.URL, 5*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to create webhook notifier: %v", err)
+	notifier := &WebhookNotifier{
+		url:        server.URL,
+		maxRetries: 3,
+		retryDelay: 10 * time.Millisecond,
+		client:     &http.Client{Timeout: 5 * time.Second},
 	}
 
 	notification := &Notification{
@@ -118,7 +122,7 @@ func TestWebhookNotifier_SendWithRetry(t *testing.T) {
 		HTMLURL:    "https://github.com/owner/repo/releases/tag/v1.0.0",
 	}
 
-	err = notifier.Send(context.Background(), notification)
+	err := notifier.Send(context.Background(), notification)
 	if err != nil {
 		t.Errorf("Send() error = %v", err)
 	}
@@ -135,9 +139,11 @@ func TestWebhookNotifier_ContextCancellation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	notifier, err := NewWebhookNotifierWithTimeout(server.URL, 5*time.Second)
-	if err != nil {
-		t.Fatalf("Failed to create webhook notifier: %v", err)
+	notifier := &WebhookNotifier{
+		url:        server.URL,
+		maxRetries: 3,
+		retryDelay: 10 * time.Millisecond,
+		client:     &http.Client{Timeout: 5 * time.Second},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -150,7 +156,7 @@ func TestWebhookNotifier_ContextCancellation(t *testing.T) {
 		HTMLURL:    "https://github.com/owner/repo/releases/tag/v1.0.0",
 	}
 
-	err = notifier.Send(ctx, notification)
+	err := notifier.Send(ctx, notification)
 	if err == nil {
 		t.Error("Expected error due to context cancellation")
 	}

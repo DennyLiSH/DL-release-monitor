@@ -201,6 +201,11 @@ func (r *Router) UpdateRepo(w http.ResponseWriter, req *http.Request) {
 			r.writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		// Re-fetch to get updated data (Updates with map doesn't refresh the struct)
+		if err := r.db.First(&repo, id).Error; err != nil {
+			r.writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	r.writeJSON(w, http.StatusOK, repo)
@@ -260,8 +265,8 @@ func (r *Router) DeleteRepo(w http.ResponseWriter, req *http.Request) {
 	// This ensures data consistency even if file deletion fails
 	go func() {
 		defer func() {
-			if r := recover(); r != nil {
-				slog.Error("Panic recovered in DeleteRepo cleanup", "panic", r)
+			if rec := recover(); rec != nil {
+				slog.Error("Panic recovered in DeleteRepo cleanup", "panic", rec)
 			}
 		}()
 
@@ -401,6 +406,10 @@ func (r *Router) UpdateConfig(w http.ResponseWriter, req *http.Request) {
 
 	if input.Retention != nil {
 		if input.Retention.MaxVersions != nil {
+			if *input.Retention.MaxVersions < 1 {
+				r.writeError(w, http.StatusBadRequest, "max_versions must be >= 1")
+				return
+			}
 			r.cfg.Retention.MaxVersions = *input.Retention.MaxVersions
 		}
 		if input.Retention.KeepLastMajor != nil {
