@@ -44,4 +44,5 @@ config.local.yaml
 
 # Analysis directories
 _*/
+_*
 CLAUDE.md
